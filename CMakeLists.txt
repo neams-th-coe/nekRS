@@ -39,20 +39,21 @@ check_compiler_version("${CMAKE_CXX_COMPILER_VERSION}")
 check_compiler_version("${CMAKE_C_COMPILER_VERSION}")
 check_compiler_version("${CMAKE_Fortran_COMPILER_VERSION}")
 
-## Sanity checks for MPI
-set(MPI_C_COMPILER ${CMAKE_C_COMPILER})
-set(MPI_CXX_COMPILER ${CMAKE_CXX_COMPILER})
-set(MPI_Fortran_COMPILER ${CMAKE_Fortran_COMPILER})
-find_package(MPI REQUIRED)
-if(NOT MPI_FOUND)
-  message(FATAL_ERROR "MPI is not found for one of the languages: C/CXX/Fortran")
-endif()
-#if (MPI_VERSION VERSION_LESS "3.1")
-#  message(FATAL_ERROR "NekRS requires an MPI version >= 3.1")
+### Sanity checks for MPI
+#set(MPI_C_COMPILER ${CMAKE_C_COMPILER})
+#set(MPI_CXX_COMPILER ${CMAKE_CXX_COMPILER})
+#set(MPI_Fortran_COMPILER ${CMAKE_Fortran_COMPILER})
+#find_package(MPI REQUIRED)
+#if(NOT MPI_FOUND)
+#  message(FATAL_ERROR "MPI is not found for one of the languages: C/CXX/Fortran")
 #endif()
+##if (MPI_VERSION VERSION_LESS "3.1")
+##  message(FATAL_ERROR "NekRS requires an MPI version >= 3.1")
+##endif()
+#message(FATAL_ERROR "Finished MPI verification")
 
 ## Check Fortran/C interface
-FortranCInterface_VERIFY(CXX QUIET)
+FortranCInterface_VERIFY(CXX)
 if (NOT FortranCInterface_VERIFIED_CXX)
     message(WARNING "C and Fortran may not work properly")
 endif()
@@ -328,6 +329,12 @@ target_link_libraries(nekrs-bin nekrs-lib)
 target_include_directories(nekrs-bin PRIVATE ${THIRD_PARTY_INCLUDES} ${NEKRS_INCLUDES})
 set_target_properties(nekrs-bin PROPERTIES OUTPUT_NAME nekrs)
 
+add_executable(dummy_driver src/dummy_driver.cpp)
+set_target_properties(dummy_driver PROPERTIES LINKER_LANGUAGE CXX)
+add_dependencies(dummy_driver nekrs-lib)
+target_link_libraries(dummy_driver nekrs-lib)
+target_include_directories(dummy_driver PRIVATE ${THIRD_PARTY_INCLUDES} ${NEKRS_INCLUDES})
+set_target_properties(dummy_driver PROPERTIES OUTPUT_NAME nekrs)
 
 #################################################################################
 ### Install                                                                     #
@@ -337,7 +344,7 @@ configure_file(install_script.in.cmake install_script.cmake @ONLY)
 install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/install_script.cmake)
 
 #install nekRS
-install(TARGETS nekrs-lib nekrs-bin
+install(TARGETS nekrs-lib nekrs-bin dummy_driver
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION lib
   PUBLIC_HEADER DESTINATION include
