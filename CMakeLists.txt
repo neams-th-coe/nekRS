@@ -12,7 +12,7 @@ set(FETCHCONTENT_UPDATES_DISCONNECTED on)
 #Link:https://gitlab.kitware.com/cmake/community/wikis/doc/cmake/RPATH-handling
 set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 set(CMAKE_SKIP_BUILD_RPATH FALSE)
-#set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/occa/lib")
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/elliptic")
@@ -37,10 +37,11 @@ set(OCCA_CXX "${CMAKE_CXX_COMPILER}" CACHE STRING "C++ compiler for OCCA JIT com
 set(OCCA_CXXFLAGS "-O2 -ftree-vectorize -funroll-loops -march=native -mtune=native"
         CACHE STRING "C++ flags for OCCA JIT compile")
 
-set(OCCA_TAG "main" CACHE STRING "Git branch, tag, or hash for cloning OCCA")
-set(NEK5000_TAG "master" CACHE STRING "Git branch, tag, or hash for cloning Nek5000")
+set(OCCA_TAG "26c1378977eb7d8273c0796212bf4fbc3b9cf04d" CACHE STRING "Git branch, tag, or hash for cloning OCCA")
+set(NEK5000_TAG "53a9b49bd6adb3aa6d76b5736379179e7a88a7f6" CACHE STRING "Git branch, tag, or hash for cloning Nek5000")
 set(HYPRE_VER "2.18.2" CACHE STRING "Version number of HYPRE to download")
 set(USE_OCCA_MEM_BYTE_ALIGN "64" CACHE STRING "Memory allignment for OCCA kernels")
+set(HYPRE_DIR "" CACHE STRING "Path to external HYPRE installation")
 
 # From OCCA's CMakeLists. All default to ON, but are verified in config tests
 #   - ENABLE_OPENMP
@@ -236,16 +237,21 @@ target_include_directories(nekrs-lib
   ${OGS_SOURCE_DIR}
   ${ELLIPTIC_SOURCE_DIR}
   ${PARALMOND_SOURCE_DIR}
-  PRIVATE
-  ${HYPRE_SOURCE_DIR}/src
-  ${HYPRE_SOURCE_DIR}/src/utilities
-  ${HYPRE_SOURCE_DIR}/src/seq_mv
-  ${HYPRE_SOURCE_DIR}/src/parcsr_mv
-  ${HYPRE_SOURCE_DIR}/src/parcsr_ls
-  ${HYPRE_SOURCE_DIR}/src/IJ_mv
-  ${HYPRE_SOURCE_DIR}/src/multivector
-  ${HYPRE_SOURCE_DIR}/src/krylov
-  ${HYPRE_BINARY_DIR})
+)
+
+if ("${HYPRE_DIR}" STREQUAL "") 
+  target_include_directories(nekrs-lib 
+    PRIVATE
+    ${HYPRE_SOURCE_DIR}/src
+    ${HYPRE_SOURCE_DIR}/src/utilities
+    ${HYPRE_SOURCE_DIR}/src/seq_mv
+    ${HYPRE_SOURCE_DIR}/src/parcsr_mv
+    ${HYPRE_SOURCE_DIR}/src/parcsr_ls
+    ${HYPRE_SOURCE_DIR}/src/IJ_mv
+    ${HYPRE_SOURCE_DIR}/src/multivector
+    ${HYPRE_SOURCE_DIR}/src/krylov
+    ${HYPRE_BINARY_DIR})
+endif()
 
 target_link_libraries(nekrs-lib PUBLIC libocca PRIVATE gs HYPRE)
 
