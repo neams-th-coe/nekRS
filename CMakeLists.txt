@@ -37,7 +37,7 @@ set(OCCA_CXX "${CMAKE_CXX_COMPILER}" CACHE STRING "C++ compiler for OCCA JIT com
 set(OCCA_CXXFLAGS "-O2 -ftree-vectorize -funroll-loops -march=native -mtune=native"
         CACHE STRING "C++ flags for OCCA JIT compile")
 
-set(OCCA_TAG "26c1378977eb7d8273c0796212bf4fbc3b9cf04d" CACHE STRING "Git branch, tag, or hash for cloning OCCA")
+set(OCCA_TAG "ef7be8425e2460b1e07160b7a7e4dab41ccd510c" CACHE STRING "Git branch, tag, or hash for cloning OCCA")
 set(NEK5000_TAG "53a9b49bd6adb3aa6d76b5736379179e7a88a7f6" CACHE STRING "Git branch, tag, or hash for cloning Nek5000")
 set(HYPRE_VER "2.18.2" CACHE STRING "Version number of HYPRE to download")
 set(USE_OCCA_MEM_BYTE_ALIGN "64" CACHE STRING "Memory allignment for OCCA kernels")
