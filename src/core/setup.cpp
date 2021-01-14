@@ -12,10 +12,8 @@ static occa::memory o_scratch;
 
 static cds_t* cdsSetup(ins_t* ins, mesh_t* mesh, setupAide options, occa::properties &kernelInfoH);
 
-nrs_t* nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, int buildOnly)
+void nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, int buildOnly, nrs_t *nrs)
 {
-  nrs_t* nrs = new nrs_t();
-
   nrs->options = options;
   nrs->kernelInfo = new occa::properties();
   occa::properties& kernelInfo = *nrs->kernelInfo;
@@ -54,7 +52,7 @@ nrs_t* nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, int buil
 
     int npTarget = size;
     if (buildOnly) nrs->options.getArgs("NP TARGET", npTarget);
-    if (rank == 0) buildNekInterface(casename.c_str(), mymax(1, nrs->Nscalar), N, npTarget);
+    if (rank == 0) buildNekInterface(casename.c_str(), mymax(5, nrs->Nscalar), N, npTarget);
     MPI_Barrier(comm);
     if (!buildOnly) {
       nek_setup(comm, nrs->options, nrs);
@@ -77,7 +75,7 @@ nrs_t* nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, int buil
   }
   mesh_t* mesh = nrs->mesh;
 
-  if (nrs->cht && !nrs->options.compareArgs("TEMPERATURE", "TRUE")) {
+  if (nrs->cht && !nrs->options.compareArgs("SCALAR00 IS TEMPERATURE", "TRUE")) {
     if (mesh->rank == 0) cout << "Conjugate heat transfer requires solving for temperature!\n"; 
     EXIT(1);
   } 
@@ -217,9 +215,6 @@ nrs_t* nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, int buil
   nrs->div   = (dfloat*) calloc(nrs->fieldOffset,sizeof(dfloat));
   nrs->o_div = mesh->device.malloc(nrs->fieldOffset * sizeof(dfloat), nrs->div);
 
-  nrs->elementInfo = (dlong*) calloc(nrs->meshT->Nelements,sizeof(dlong));
-  for (int e = 0; e < nrs->meshT->Nelements; e++) nrs->elementInfo[e] = mesh->elementInfo[e];
-  nrs->o_elementInfo = mesh->device.malloc(nrs->meshT->Nelements * sizeof(dlong), nrs->elementInfo);
   dfloat rkC[4]  = {1.0, 0.0, -1.0, -2.0};
   nrs->o_rkC     = mesh->device.malloc(4 * sizeof(dfloat),rkC);
   nrs->o_extbdfA = mesh->device.malloc(3 * sizeof(dfloat), nrs->extbdfA);
@@ -536,11 +531,10 @@ nrs_t* nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, int buil
   }
 
   if(!buildOnly) {
-    int readRestartFile;
-    nrs->options.getArgs("RESTART FROM FILE", readRestartFile);
+    // get IC + t0 from nek
     double startTime;
     nek_copyTo(startTime);
-    if(readRestartFile) nrs->options.setArgs("START TIME", to_string_f(startTime));
+    nrs->options.setArgs("START TIME", to_string_f(startTime));
 
     if(mesh->rank == 0)  printf("calling udf_setup ... "); fflush(stdout);
     udf.setup(nrs);
@@ -864,7 +858,6 @@ nrs_t* nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, int buil
 
   } // flow
 
-  return nrs;
 }
 
 static cds_t* cdsSetup(nrs_t* nrs, mesh_t* mesh, setupAide options, occa::properties &kernelInfoH)
