@@ -12,7 +12,7 @@ static MPI_Comm comm;
 static occa::device device;
 static nrs_t* nrs;
 static setupAide options;
-static int ioStep;
+static dfloat lastOutputTime = 0;
 
 static void setOccaVars(string dir);
 static void setOUDF(setupAide &options);
@@ -31,7 +31,18 @@ void setup(MPI_Comm comm_in, int buildOnly, int sizeTarget,
            int ciMode, string cacheDir, string _setupFile,
            string _backend, string _deviceID)
 {
-  MPI_Comm_dup(comm_in, &comm);
+  if(buildOnly) {
+    int rank, size;
+    MPI_Comm_rank(comm_in, &rank);
+    MPI_Comm_size(comm_in, &size);
+    int color = MPI_UNDEFINED;
+    if (rank == 0) color = 1;     
+    MPI_Comm_split(comm_in, color, 0, &comm);
+    if (rank != 0) return;
+  } else {
+    MPI_Comm_dup(comm_in, &comm);
+  }
+    
   MPI_Comm_rank(comm, &rank);
   MPI_Comm_size(comm, &size);
 
@@ -47,12 +58,13 @@ void setup(MPI_Comm comm_in, int buildOnly, int sizeTarget,
     cout << "using OCCA_CACHE_DIR: " << occa::env::OCCA_CACHE_DIR << endl << endl;
   }
 
-  options = parRead(setupFile, comm);
+  nrs = new nrs_t();
 
-  if(buildOnly) 
-    options.setArgs("BUILD ONLY", "TRUE");
-  else
-    options.setArgs("BUILD ONLY", "FALSE");
+  nrs->par = new inipp::Ini<char>();	   
+  options = parRead((void*) nrs->par, setupFile, comm);
+
+  options.setArgs("BUILD ONLY", "FALSE");
+  if(buildOnly) options.setArgs("BUILD ONLY", "TRUE"); 
   if(!_backend.empty()) options.setArgs("THREAD MODEL", _backend);
   if(!_deviceID.empty()) options.setArgs("DEVICE NUMBER", _deviceID);
 
@@ -73,8 +85,10 @@ void setup(MPI_Comm comm_in, int buildOnly, int sizeTarget,
   string udfFile;
   options.getArgs("UDF FILE", udfFile);
   if (!udfFile.empty()) {
-    if(rank == 0) udfBuild(udfFile.c_str());
-    MPI_Barrier(comm);
+    int err = 0;
+    if(rank == 0) err = udfBuild(udfFile.c_str());
+    MPI_Allreduce(MPI_IN_PLACE, &err, 1, MPI_INT, MPI_SUM, comm);
+    if(err) ABORT(EXIT_FAILURE);;
     udfLoad();
   }
 
@@ -84,7 +98,7 @@ void setup(MPI_Comm comm_in, int buildOnly, int sizeTarget,
 
   if(udf.setup0) udf.setup0(comm, options);
 
-  nrs = nrsSetup(comm, device, options, buildOnly);
+  nrsSetup(comm, device, options, nrs);
 
   nrs->o_U.copyFrom(nrs->U);
   nrs->o_P.copyFrom(nrs->P);
@@ -114,8 +128,8 @@ void setup(MPI_Comm comm_in, int buildOnly, int sizeTarget,
   const double setupTime = timer::query("setup", "DEVICE:MAX");
   if(rank == 0) {
     cout << "\nsettings:\n" << endl << options << endl;
-    size_t dMB = nrs->mesh->device.memoryAllocated() / 1e6;
-    cout << "device memory allocation: " << dMB << " MB" << endl;
+    size_t dGB = nrs->mesh->device.memoryAllocated()/1e9;
+    cout << "device memory usage: " << dGB << " GB" << endl;
     cout << "initialization took " <<  setupTime << " s" << endl;
   }
   fflush(stdout);
@@ -172,9 +186,21 @@ const int writeControlRunTime(void)
   return nrs->options.compareArgs("SOLUTION OUTPUT CONTROL", "RUNTIME");
 }
 
-void outfld(double time, double outputTime)
+const int isOutputStep(double time, int tStep)
+{
+  int outputStep = 0;
+  if (writeControlRunTime()) {
+    outputStep = (time >= lastOutputTime + nekrs::writeInterval());
+  } else {
+    if (writeInterval() > 0) outputStep = (tStep%(int)writeInterval() == 0);
+  }
+  return outputStep;
+}
+
+void outfld(double time)
 {
   writeFld(nrs, time, 0);
+  lastOutputTime = time;
 }
 
 const double endTime(void)
@@ -201,7 +227,7 @@ const int lastStep(double time, int tstep, double elapsedTime)
      const double eps = 1e-12;
      nrs->lastStep = fabs((time+nrs->dt[0]) - endTime()) < eps || (time+nrs->dt[0]) > endTime();
   } else {
-    nrs->lastStep = (tstep+1 > numSteps());
+    nrs->lastStep = tstep == numSteps();
   }
 
   return nrs->lastStep;
@@ -233,6 +259,7 @@ static void dryRun(setupAide &options, int npTarget)
          << " MPI ranks ...\n" << endl;
 
   options.setArgs("NP TARGET", std::to_string(npTarget));
+  options.setArgs("BUILD ONLY", "TRUE");
 
   // jit compile udf
   string udfFile;
@@ -247,7 +274,7 @@ static void dryRun(setupAide &options, int npTarget)
   if(udf.setup0) udf.setup0(comm, options);
 
   // init solver
-  nrs = nrsSetup(comm, device, options, 1);
+  nrsSetup(comm, device, options, nrs);
 
   if (rank == 0) cout << "\nBuild successful." << endl;
 }
@@ -262,7 +289,7 @@ static void setOUDF(setupAide &options)
   char* ptr = realpath(oklFile.c_str(), NULL);
   if(!ptr) {
     if (rank == 0) cout << "ERROR: Cannot find " << oklFile << "!\n";
-    EXIT(1);
+    ABORT(EXIT_FAILURE);;
   }
   free(ptr);
 

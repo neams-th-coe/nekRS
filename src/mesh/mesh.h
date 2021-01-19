@@ -63,11 +63,12 @@ typedef struct
   int* EToP;   // element-to-partition/process connectivity
   int* EToB;   // element-to-boundary condition type
 
-  hlong* elementInfo; //type of element
+  dlong* elementInfo; //type of element
+  occa::memory o_elementInfo;
 
   // boundary faces
   hlong NboundaryFaces; // number of boundary faces
-  hlong* boundaryInfo; // list of boundary faces (type, vertex-1, vertex-2, vertex-3)
+  hlong* boundaryInfo; // list of all boundary faces (type, vertex-1, vertex-2, vertex-3) in the mesh
 
   // MPI halo exchange info
   dlong totalHaloPairs;   // number of elements to be sent in halo exchange
@@ -490,6 +491,7 @@ void meshParallelConnect(mesh_t* mesh);
 void meshParallelConnectNodes(mesh_t* mesh, int nrsBuildOnly);
 
 void meshHaloSetup(mesh_t* mesh);
+void meshHaloPhysicalNodes(mesh_t* mesh);
 
 /* extract whole elements for the halo exchange */
 void meshHaloExtract(mesh_t* mesh, size_t Nbytes, void* sourceBuffer, void* haloBuffer);

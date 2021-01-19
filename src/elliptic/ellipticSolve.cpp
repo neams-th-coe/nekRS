@@ -44,7 +44,7 @@ int ellipticSolve(elliptic_t* elliptic,
     ellipticUpdateJacobi(elliptic);
 
   if(options.compareArgs("RESIDUAL PROJECTION","TRUE"))
-    elliptic->o_x0.copyFrom(o_x, elliptic->Ntotal * sizeof(dfloat));
+    elliptic->o_x0.copyFrom(o_x, elliptic->Nfields * elliptic->Ntotal * sizeof(dfloat));
 
   // compute initial residual
   ellipticOperator(elliptic, o_x, elliptic->o_Ap, dfloatString);
@@ -64,7 +64,7 @@ int ellipticSolve(elliptic_t* elliptic,
     Niter = pcg (elliptic, o_r, o_x, tol, maxIter);
   }else{
     printf("NONBLOCKING Krylov solvers currently not supported!");
-    exit(1);
+    ABORT(EXIT_FAILURE);
 /*
     if(!options.compareArgs("KRYLOV SOLVER", "FLEXIBLE"))
       Niter = nbpcg (elliptic, o_r, o_x, tol, maxIter);
