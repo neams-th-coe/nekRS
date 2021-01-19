@@ -43,8 +43,7 @@ void ellipticSolveSetup(elliptic_t* elliptic, occa::properties kernelInfo)
     if(mesh->rank == 0)
       printf("ERROR: Block solver is implemented for C0-HEXAHEDRA with Jacobi preconditioner only\n");
 
-    MPI_Finalize();
-    exit(-1);
+    ABORT(EXIT_FAILURE);
   }
 
   if (options.compareArgs("COEFFICIENT","VARIABLE") &&  elliptic->elementType != HEXAHEDRA &&
@@ -52,8 +51,7 @@ void ellipticSolveSetup(elliptic_t* elliptic, occa::properties kernelInfo)
     if(mesh->rank == 0)
       printf("ERROR: Varibale coefficient solver is implemented for C0-HEXAHEDRA only\n");
 
-    MPI_Finalize();
-    exit(-1);
+    ABORT(EXIT_FAILURE);
   }
 
   if (options.compareArgs("COEFFICIENT","VARIABLE")) {
@@ -63,8 +61,8 @@ void ellipticSolveSetup(elliptic_t* elliptic, occa::properties kernelInfo)
       if(mesh->rank == 0)
         printf(
           "ERROR: Varibale coefficient solver is implemented for constant multigrid preconditioner only\n");
-      MPI_Finalize();
-      exit(-1);
+
+      ABORT(EXIT_FAILURE);
     }
   }
 
@@ -209,34 +207,6 @@ void ellipticSolveSetup(elliptic_t* elliptic, occa::properties kernelInfo)
 
   elliptic->Nblock = Nblock;
   elliptic->Nblock2 = Nblock2;
-
-  //fill geometric factors in halo
-  if(mesh->totalHaloPairs) {
-    dlong Nlocal = mesh->Nelements;
-    dlong Nhalo = mesh->totalHaloPairs;
-    size_t Nbytes = mesh->Nvgeo * sizeof(dfloat);
-
-    if (elliptic->elementType == QUADRILATERALS || elliptic->elementType == HEXAHEDRA) {
-      Nlocal *= mesh->Np;
-      Nhalo *= mesh->Np;
-      Nbytes *= mesh->Np;
-    }
-
-    dfloat* vgeoSendBuffer = (dfloat*) calloc(Nhalo * mesh->Nvgeo, sizeof(dfloat));
-
-    // import geometric factors from halo elements
-    mesh->vgeo = (dfloat*) realloc(mesh->vgeo, (Nlocal + Nhalo) * mesh->Nvgeo * sizeof(dfloat));
-
-    meshHaloExchange(mesh,
-                     Nbytes,
-                     mesh->vgeo,
-                     vgeoSendBuffer,
-                     mesh->vgeo + Nlocal * mesh->Nvgeo);
-
-    mesh->o_vgeo =
-      mesh->device.malloc((Nlocal + Nhalo) * mesh->Nvgeo * sizeof(dfloat), mesh->vgeo);
-    free(vgeoSendBuffer);
-  }
 
   // count total number of elements
   hlong NelementsLocal = mesh->Nelements;
@@ -856,7 +826,7 @@ void ellipticSolveSetup(elliptic_t* elliptic, occa::properties kernelInfo)
             if(elliptic->var_coeff || elliptic->blockSolver) {
               printf(
                 "ERROR: TRILINEAR form is not implemented for varibale coefficient and block solver yet \n");
-              exit(-1);
+              ABORT(EXIT_FAILURE);
             }
             kernelName = "ellipticPartialAxTrilinear" + suffix;
           }else {
