@@ -38,7 +38,7 @@ set(OCCA_CXXFLAGS "-O2 -ftree-vectorize -funroll-loops -march=native -mtune=nati
         CACHE STRING "C++ flags for OCCA JIT compile")
 
 set(OCCA_TAG "ef7be8425e2460b1e07160b7a7e4dab41ccd510c" CACHE STRING "Git branch, tag, or hash for cloning OCCA")
-set(NEK5000_TAG "a30afa09e90f3ca52916ae6816c8569412a3ca63" CACHE STRING "Git branch, tag, or hash for cloning Nek5000")
+set(NEK5000_TAG "44f5904cd5c3622dd9d5fc6a3881ec7d4d498f18" CACHE STRING "Git branch, tag, or hash for cloning Nek5000")
 set(HYPRE_VER "2.20.0" CACHE STRING "Version number of HYPRE to download")
 set(USE_OCCA_MEM_BYTE_ALIGN "64" CACHE STRING "Memory allignment for OCCA kernels")
 set(HYPRE_DIR "" CACHE STRING "Path to external HYPRE installation")
@@ -175,6 +175,7 @@ include(config/blaslapack.cmake)
 set(SRC 
     src/lib/nekrs.cpp
     src/io/writeFld.cpp
+    src/io/utils.cpp
     src/core/utils/mysort.cpp
     src/core/utils/parallelSort.cpp
     src/core/utils/occaHelpers.cpp
