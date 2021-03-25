@@ -249,7 +249,7 @@ void nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, nrs_t *nrs
     if (mesh->rank == 0) cout << "done" << endl;
   }
 
-  nrs->linAlg = new linAlg_t(mesh->device, nrs->kernelInfo, mesh->comm);
+  nrs->linAlg = new linAlg_t(mesh->device, kernelInfo, mesh->comm);
 
   meshParallelGatherScatterSetup(mesh, nrs->Nlocal, mesh->globalIds, mesh->comm, 0);
   oogs_mode oogsMode = OOGS_AUTO; 
@@ -262,7 +262,8 @@ void nrsSetup(MPI_Comm comm, occa::device device, setupAide &options, nrs_t *nrs
     MPI_Allreduce(MPI_IN_PLACE, &gNelements, 1, MPI_DLONG, MPI_SUM, mesh->comm);
     const dfloat sum2 = (dfloat)gNelements * mesh->Np;
     nrs->linAlg->fillKernel(nrs->fieldOffset, 1.0, nrs->o_wrk0);
-    ogsGatherScatter(nrs->o_wrk0, ogsDfloat, ogsAdd, mesh->ogs);
+    //ogsGatherScatter(nrs->o_wrk0, ogsDfloat, ogsAdd, mesh->ogs);
+    oogs::startFinish(nrs->o_wrk0, 1, 0, ogsDfloat, ogsAdd, nrs->gsh);
     nrs->linAlg->axmyKernel(Nlocal, 1.0, mesh->ogs->o_invDegree, nrs->o_wrk0); 
     dfloat* tmp = (dfloat*) calloc(Nlocal, sizeof(dfloat));
     nrs->o_wrk0.copyTo(tmp, Nlocal * sizeof(dfloat));

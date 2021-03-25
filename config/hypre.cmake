@@ -47,4 +47,3 @@ else()
   # This conflicts with the stdlib "version" header...
   file(REMOVE ${HYPRE_SOURCE_DIR}/src/utilities/version)
 endif()
-
