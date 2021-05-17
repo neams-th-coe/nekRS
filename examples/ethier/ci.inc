@@ -1,4 +1,5 @@
 #include <math.h>
+#include <limits>
 
 static int ciMode = 0;
 
@@ -53,6 +54,59 @@ void ciSetup(MPI_Comm comm, setupAide &options)
   options.setArgs("VARIABLEPROPERTIES", "FALSE");
 }
 
+dfloat sum(dfloat const * const array, const int size, MPI_Comm comm)
+{
+  dfloat sumr = 0.0;
+  for(int i = 0 ; i < size; ++i)
+    sumr += array[i];
+  MPI_Allreduce(MPI_IN_PLACE, &sumr, 1, MPI_DFLOAT, MPI_SUM, comm);
+  return sumr;
+}
+dfloat max(dfloat const * const array, const int size, MPI_Comm comm)
+{
+  dfloat maxr = -9e30;
+  for(int i = 0 ; i < size; ++i)
+    maxr = (array[i] > maxr) ? array[i] : maxr;
+  MPI_Allreduce(MPI_IN_PLACE, &maxr, 1, MPI_DFLOAT, MPI_MAX, comm);
+  return maxr;
+}
+dfloat min(dfloat const * const array, const int size, MPI_Comm comm)
+{
+  dfloat minr = 9e30;
+  for(int i = 0 ; i < size; ++i)
+    minr = (array[i] < minr) ? array[i] : minr;
+  MPI_Allreduce(MPI_IN_PLACE, &minr, 1, MPI_DFLOAT, MPI_MIN, comm);
+  return minr;
+}
+void ciTestLinAlg(nrs_t *nrs, const int N)
+{
+  linAlg_t* linAlg = nrs->linAlg;
+  MPI_Comm comm = nrs->mesh->comm;
+  int rank = nrs->mesh->rank;
+  dfloat* x = (dfloat*) calloc(N, sizeof(dfloat));
+  for(int i = 0 ; i < N; ++i)
+    x[i] = drand48();
+  occa::memory o_x = nrs->mesh->device.malloc(N*sizeof(dfloat), x);
+  const dfloat referenceSum = sum(x,N,comm);
+  const dfloat referenceMax = max(x,N,comm);
+  const dfloat referenceMin = min(x,N,comm);
+  const dfloat err_sum = abs(
+    (referenceSum - linAlg->sum(N, o_x, comm))/referenceSum
+  );
+  const dfloat err_max = abs(
+    (referenceMax - linAlg->max(N, o_x, comm))/referenceMax
+  );
+  const dfloat err_min = abs(
+    (referenceMin - linAlg->min(N, o_x, comm))/referenceMin
+  );
+  if(rank == 0) printf("linAlg errs (N=%d): max=%g, min=%g, sum=%g\n", N, err_max, err_min, err_sum);
+  free(x);
+  o_x.free();
+  const dfloat testTol = 50. * std::numeric_limits<dfloat>::epsilon();
+  if(err_max > testTol || err_min > testTol || err_sum > testTol)
+    FAIL;
+}
+
 void ciTestErrors(nrs_t *nrs, dfloat time, int tstep)
 {
   if (!nrs->lastStep) return;
@@ -69,6 +123,16 @@ void ciTestErrors(nrs_t *nrs, dfloat time, int tstep)
   
   int pIterErr;
   int velIterErr;
+
+  ciTestLinAlg(nrs, BLOCKSIZE / 16);
+  ciTestLinAlg(nrs, BLOCKSIZE / 8);
+  ciTestLinAlg(nrs, BLOCKSIZE / 4);
+  ciTestLinAlg(nrs, BLOCKSIZE / 2);
+  ciTestLinAlg(nrs, BLOCKSIZE);
+  ciTestLinAlg(nrs, 2 * BLOCKSIZE);
+  ciTestLinAlg(nrs, 4 * BLOCKSIZE);
+  ciTestLinAlg(nrs, 8 * BLOCKSIZE);
+  ciTestLinAlg(nrs, 16 * BLOCKSIZE);
 
   switch (ciMode) {
     case 1 : velIterErr = abs(nrs->NiterU - 10);
