@@ -27,11 +27,16 @@
 #ifndef ELLIPTIC_MGLEVEL_HPP
 #define ELLIPTIC_MGLEVEL_HPP
 
-typedef enum {RICHARDSON = 1,
-              CHEBYSHEV = 2,
-              SCHWARZ = 3} SmoothType;
-typedef enum {JACOBI = 1,
-              SCHWARZ_SMOOTH = 3} SmootherType;
+enum class SmootherType
+{
+  CHEBYSHEV,
+  SCHWARZ,
+};
+enum class SecondarySmootherType
+{  
+  JACOBI,
+  SCHWARZ,
+};
 
 class MGLevel : public parAlmond::multigridLevel
 {
@@ -50,9 +55,9 @@ public:
   occa::memory o_invDegree;
 
   //smoothing params
-  SmoothType stype;
-  SmootherType smtypeUp;
-  SmootherType smtypeDown;
+  SmootherType stype;
+  SecondarySmootherType smtypeUp;
+  SecondarySmootherType smtypeDown;
 
   dfloat lambda1, lambda0;
   int ChebyshevIterations;
@@ -66,7 +71,6 @@ public:
   bool overlap;
   occa::kernel fusedFDMKernel;
   occa::kernel postFDMKernel;
-  occa::kernel collocateKernel;
   // Eigenvectors
   occa::memory o_Sx;
   occa::memory o_Sy;
@@ -111,25 +115,24 @@ public:
           parAlmond::KrylovType ktype_,
           MPI_Comm comm_);
 
-  void Ax(dfloat* x, dfloat* Ax) {}
+  void Ax(dfloat* /*x*/, dfloat* /*Ax*/) {}
   void Ax(occa::memory o_x, occa::memory o_Ax);
 
-  void residual(dfloat* rhs, dfloat* x, dfloat* res) {}
+  void residual(dfloat* /*rhs*/, dfloat* /*x*/, dfloat* /*res*/) {}
   void residual(occa::memory o_rhs, occa::memory o_x, occa::memory o_res);
 
-  void coarsen(dfloat* x, dfloat* Cx) {}
+  void coarsen(dfloat* /*x*/, dfloat* /*Cx*/) {}
   void coarsen(occa::memory o_x, occa::memory o_Cx);
 
-  void prolongate(dfloat* x, dfloat* Px) {}
+  void prolongate(dfloat* /*x*/, dfloat* /*Px*/) {}
   void prolongate(occa::memory o_x, occa::memory o_Px);
 
   //smoother ops
-  void smooth(dfloat* rhs, dfloat* x, bool x_is_zero) {}
+  void smooth(dfloat* /*rhs*/, dfloat* /*x*/, bool /*x_is_zero*/) {}
   void smooth(occa::memory o_rhs, occa::memory o_x, bool x_is_zero);
 
   void smoother(occa::memory o_x, occa::memory o_Sx, bool xIsZero);
 
-  void smoothRichardson(occa::memory &o_r, occa::memory &o_x, bool xIsZero);
   void smoothChebyshev (occa::memory &o_r, occa::memory &o_x, bool xIsZero);
   void smoothSchwarz (occa::memory &o_r, occa::memory &o_x, bool xIsZero);
 
@@ -140,10 +143,10 @@ public:
   void setupSmoother(elliptic_t* base);
   dfloat maxEigSmoothAx();
 
-  void buildCoarsenerTriTet(mesh_t** meshLevels, int Nf, int Nc);
   void buildCoarsenerQuadHex(mesh_t** meshLevels, int Nf, int Nc);
 private:
   void smoothChebyshevOneIteration (occa::memory &o_r, occa::memory &o_x, bool xIsZero);
+  void smoothChebyshevTwoIteration (occa::memory &o_r, occa::memory &o_x, bool xIsZero);
 };
 
 void MGLevelAllocateStorage(MGLevel* level, int k, parAlmond::CycleType ctype);

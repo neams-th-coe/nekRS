@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "mesh3D.h"
+#include <vector>
 #define NODE_GEN
 
 void meshLoadReferenceNodesHex3D(mesh3D* mesh, int N, int cubN)
@@ -37,6 +38,10 @@ void meshLoadReferenceNodesHex3D(mesh3D* mesh, int N, int cubN)
   mesh->Nfp = (N + 1) * (N + 1);
   mesh->Np = (N + 1) * (N + 1) * (N + 1);
   mesh->Nverts = 8;
+
+  mesh->Nvgeo = 12;
+  mesh->Nggeo = 7;
+  mesh->Nsgeo = 17;
 
   int Nrows, Ncols;
 
@@ -64,17 +69,24 @@ void meshLoadReferenceNodesHex3D(mesh3D* mesh, int N, int cubN)
   DegreeRaiseMatrix1D(mesh->N, mesh->N + 1, mesh->interpRaise);
   DegreeRaiseMatrix1D(mesh->N - 1, mesh->N, mesh->interpLower);
 
+  /*
+  intr = (dfloat*) malloc(meshP->Nq * sizeof(dfloat));
+  intw = (dfloat*) malloc(meshP->Nq * sizeof(dfloat));
+  JacobiGLL(meshP->N, intr, intw);
+  mesh->interp = (dfloat*) calloc(mesh->Nq * meshP->Nq, sizeof(dfloat));
+  InterpolationMatrix1D(mesh->N, mesh->Nq, mesh->r, meshP->Nq, intr, mesh->interp);
+  free(intr);
+  free(intw);
+  */
+
   mesh->cubNfp = mesh->cubNq * mesh->cubNq;
   mesh->cubNp = mesh->cubNq * mesh->cubNq * mesh->cubNq;
-  // cubN+1 point Gauss-Legendre quadrature
   mesh->cubr = (dfloat*) malloc(mesh->cubNq * sizeof(dfloat));
   mesh->cubw = (dfloat*) malloc(mesh->cubNq * sizeof(dfloat));
-  JacobiGLL(mesh->cubNq - 1, mesh->cubr, mesh->cubw);
-
+  //JacobiGLL(mesh->cubNq - 1, mesh->cubr, mesh->cubw);
+  JacobiGQ(0, 0, mesh->cubNq - 1, mesh->cubr, mesh->cubw);
   mesh->cubInterp = (dfloat*) calloc(mesh->Nq * mesh->cubNq, sizeof(dfloat));
   InterpolationMatrix1D(mesh->N, mesh->Nq, mesh->r, mesh->cubNq, mesh->cubr, mesh->cubInterp); //uses the fact that r = gllz for 1:Nq
-
-  //cubature project cubProject = cubInterp^T
   mesh->cubProject = (dfloat*) calloc(mesh->cubNq * mesh->Nq, sizeof(dfloat));
   matrixTranspose(mesh->cubNq, mesh->Nq, mesh->cubInterp, mesh->Nq, mesh->cubProject, mesh->cubNq);
 
@@ -86,12 +98,6 @@ void meshLoadReferenceNodesHex3D(mesh3D* mesh, int N, int cubN)
   for(int i = 0; i < mesh->cubNq; ++i)
     for(int j = 0; j < mesh->cubNq; ++j)
       mesh->cubDW[j + i * mesh->cubNq] = mesh->cubD[i + j * mesh->cubNq];
-
-  mesh->intNfp = 0;
-  mesh->intLIFT = NULL;
-  mesh->max_EL_nnz = 0;
-  mesh->intNfp = 0;
-
   // find node indices of vertex nodes
   dfloat NODETOL = 1e-6;
   mesh->vertexNodes = (int*) calloc(mesh->Nverts, sizeof(int));
@@ -122,5 +128,28 @@ void meshLoadReferenceNodesHex3D(mesh3D* mesh, int N, int cubN)
       mesh->vertexNodes[7] = n;
   }
 
-  mesh->max_EL_nnz = 0;
+  std::vector<int> _edgeNodes;
+  for(int n = 0; n < mesh->Np; ++n) {
+    const dfloat r = mesh->r[n];
+    const dfloat s = mesh->s[n];
+    const dfloat t = mesh->t[n];
+    if( (r+1)*(r+1) + (s+1)*(s+1) < NODETOL) _edgeNodes.push_back(n);
+    if( (r+1)*(r+1) + (s-1)*(s-1) < NODETOL) _edgeNodes.push_back(n);
+    if( (r-1)*(r-1) + (s+1)*(s+1) < NODETOL) _edgeNodes.push_back(n);
+    if( (r-1)*(r-1) + (s-1)*(s-1) < NODETOL) _edgeNodes.push_back(n);
+
+    if( (r+1)*(r+1) + (t+1)*(t+1) < NODETOL) _edgeNodes.push_back(n);
+    if( (r+1)*(r+1) + (t-1)*(t-1) < NODETOL) _edgeNodes.push_back(n);
+    if( (r-1)*(r-1) + (t+1)*(t+1) < NODETOL) _edgeNodes.push_back(n);
+    if( (r-1)*(r-1) + (t-1)*(t-1) < NODETOL) _edgeNodes.push_back(n);
+
+    if( (s+1)*(s+1) + (t+1)*(t+1) < NODETOL) _edgeNodes.push_back(n);
+    if( (s+1)*(s+1) + (t-1)*(t-1) < NODETOL) _edgeNodes.push_back(n);
+    if( (s-1)*(s-1) + (t+1)*(t+1) < NODETOL) _edgeNodes.push_back(n);
+    if( (s-1)*(s-1) + (t-1)*(t-1) < NODETOL) _edgeNodes.push_back(n);
+  }
+
+  mesh->edgeNodes = (int*) calloc(_edgeNodes.size(), sizeof(int));
+  memcpy(mesh->edgeNodes, _edgeNodes.data(), _edgeNodes.size() * sizeof(int));
+  mesh->NedgeNodes = _edgeNodes.size();
 }

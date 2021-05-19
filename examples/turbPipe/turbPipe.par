@@ -1,11 +1,11 @@
 [OCCA]
-backend = CUDA
-deviceNumber = LOCAL-RANK
+#backend = CUDA
+#deviceNumber = LOCAL-RANK
 
 [GENERAL]
 #verbose = true
 polynomialOrder = 7
-#startFrom = restart.fld
+#startFrom = "restart.fld"
 stopAt = endTime
 endTime = 200
 
@@ -18,8 +18,8 @@ writeControl = runTime
 writeInterval = 1
 
 filtering = hpfrt
-filterWeight = 8
-filterModes = 20
+filterWeight = 0.1/${dt}
+filterModes = 1
 
 [PRESSURE]
 residualTol = 1e-04
@@ -29,7 +29,7 @@ residualTol = 1e-04
 #galerkinCoarseOperator = true
 
 [VELOCITY]
-solver = pcg+block
+#solver = pcg
 boundaryTypeMap = inlet, outlet, wall
 density = 1.0
 viscosity = -19000

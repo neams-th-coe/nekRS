@@ -5,7 +5,7 @@
 [![Build Status](https://travis-ci.com/Nek5000/nekRS.svg?branch=master)](https://travis-ci.com/Nek5000/nekRS)
 [![License](https://img.shields.io/badge/License-BSD%203--Clause-orange.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
-**nekRS** is an open-source Navier Stokes solver based on the spectral element method targeting classical processors and hardware accelerators like GPUs. The code started as a fork of [libParanumal](https://github.com/paranumal/libparanumal) tailored to our needs. For portable programming across different backends [OCCA](https://github.com/libocca/occa) is used.  
+**nekRS** is an open-source Navier Stokes solver based on the spectral element method targeting classical processors and hardware accelerators like GPUs. The code started as an early fork of [libParanumal](https://github.com/paranumal/libparanumal) tailored to our needs. For portable programming [OCCA](https://github.com/libocca/occa) is used.  
 
 Capabilities:
 
@@ -16,6 +16,7 @@ Capabilities:
 * Interface to [Nek5000](https://github.com/Nek5000/Nek5000) 
 * Conjugate fluid-solid heat transfer
 * LES and RANS turbulence models
+* ALE formulation for moving mesh support
 * VisIt & Paraview support for data analysis and visualization
 
 Note, the code is an prototype so it's very likely that you run into undiscovered issues. Moreover it's evolving quickly so things might change from one version to another without being backward compatible. 
@@ -28,13 +29,13 @@ Requirements:
 * GNU compiler collection version 6.2 or later
 * MPI-3.1 or later
 * CMake version 3.11 or later
-* Login shell bash or zsh
+* bash
 
 Download the latest release tarball
 
 ```sh
-wget https://github.com/Nek5000/nekRS/releases/download/v20.1/nekRS-v20.1.tar.gz 
-tar -zxf nekRS-v20.1.tar.gz 
+wget https://github.com/Nek5000/nekRS/archive/refs/tags/v21.0.tar.gz 
+tar -zxf v21.0.tar.gz 
 ```
 
 
@@ -59,27 +60,32 @@ add the following line to your $HOME/.bash_profile:
 
 ```sh
 export NEKRS_HOME=$HOME/.local/nekrs
-PATH=${NEKRS_HOME}/bin:${PATH}
+export PATH=$NEKRS_HOME/bin:$PATH
 ```
 then type `source $HOME/.bash_profile` in the current terminal window. 
 
 ## Run Example
 
 ```sh
-cd $NEKRS_HOME/examples/ethier
-nrspre ethier 2 # optional step to JIT precompile
-nrsmpi ethier 2 # run on two MPI ranks
+cd $NEKRS_HOME/examples/turbPipePeriodic
+nrspre turbPipe 2 # precompile JIT code
+nrsmpi turbPipe 2 # run on two MPI ranks
 ```
-You may have to adjust the example launch scripts `nrsmpi/nrsbmpi` to your environment. 
+You may have to adjust the example launch scripts `nrsmpi/nrsbmpi` to your environment.
+Please check the examples in `bin`.
 
-## Contributing
-Our project is hosted on [GitHub](https://github.com/Nek5000/nekRS) and everbody is welcome to become a part of it. If you are planning a large contribution, we encourage you to discuss the concept here on GitHub and interact with us frequently to ensure that your effort is well-directed.
+## Documentation
+For documentation, see our [readthedocs page](https://nekrs.readthedocs.io/en/latest/).
 
-## Support
-Please visit [Dicussions](https://github.com/Nek5000/nekRS/discussions) on [GitHub](https://github.com/Nek5000/nekRS). Here we help, find solutions, share ideas, and follow discussions.
+## Discussion Group
+Please visit [Discussions](https://github.com/Nek5000/nekRS/discussions) on [GitHub](https://github.com/Nek5000/nekRS). Here we help, find solutions, share ideas, and follow discussions.
 
 ## Reporting Bugs
-nekRS is hosted on GitHub and all bugs are reported and tracked through the [Issues](https://github.com/Nek5000/nekRS/issues) feature on GitHub. If you are having trouble installing the code or getting your model to run properly, you should first send a message to the User's Group [mailing list](https://groups.google.com/forum/#!forum/nekRS).
+nekRS is hosted on GitHub and all bugs are reported and tracked through the [Issues](https://github.com/Nek5000/nekRS/issues) feature on GitHub. If you are having trouble installing the code or getting your model to run properly, you should first vist our [dicussions](https://github.com/Nek5000/nekRS/discussions) forum on GitHub.
+
+## Contributing
+Our project is hosted on [GitHub](https://github.com/Nek5000/nekRS) and everbody is welcome to become a part of it.
+For more details see CONTRIBUTING.md.
 
 ## License
 nekRS is released under the BSD 3-clause license (see LICENSE file). 
