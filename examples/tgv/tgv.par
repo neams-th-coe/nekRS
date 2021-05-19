@@ -1,10 +1,6 @@
-[OCCA]
-backend = CUDA
-deviceNumber = LOCAL-RANK
-
 [GENERAL]
 polynomialOrder = 7
-#startFrom = restart.fld
+#startFrom = "restart.fld"
 stopAt = endTime
 endTime = 20
 
@@ -17,7 +13,7 @@ writeControl = runTime
 writeInterval = 1
 
 filtering = hpfrt
-filterWeight = 2
+filterWeight = 0.02/${dt}
 filterModes = 1
 
 [PRESSURE]

@@ -1,12 +1,14 @@
 cmake_minimum_required(VERSION 3.11)
-project(NekRS LANGUAGES C CXX Fortran VERSION 20.1)
+project(NekRS LANGUAGES C CXX Fortran VERSION 21.1)
 
 include(FortranCInterface)
 include(ExternalProject)
 include(FetchContent)
 
-set(CMAKE_VERBOSE_MAKEFILE on)
-set(FETCHCONTENT_QUIET off)
+set_property(GLOBAL PROPERTY RULE_MESSAGES OFF)
+set(CMAKE_INSTALL_MESSAGE NEVER)
+set(CMAKE_VERBOSE_MAKEFILE OFF)
+set(FETCHCONTENT_QUIET on)
 set(FETCHCONTENT_UPDATES_DISCONNECTED on)
 
 #Link:https://gitlab.kitware.com/cmake/community/wikis/doc/cmake/RPATH-handling
@@ -30,9 +32,6 @@ set(NEK5000_PPLIST "PARRSB DPROCMAP" CACHE STRING
 set(NEKINTERFACEDIR "${CMAKE_CURRENT_SOURCE_DIR}/src/nekInterface/" CACHE PATH 
   "Directory for Nek5000 inteface source files")
 
-set(LIBP_DEFINES "-DUSE_NULL_PROJECTION=1" CACHE STRING 
-  "Preprocessor macros for libparanumal")
-
 set(OCCA_CXX "${CMAKE_CXX_COMPILER}" CACHE STRING "C++ compiler for OCCA JIT compile")
 set(OCCA_CXXFLAGS "-O2 -ftree-vectorize -funroll-loops -march=native -mtune=native"
         CACHE STRING "C++ flags for OCCA JIT compile")
@@ -40,9 +39,14 @@ set(OCCA_CXXFLAGS "-O2 -ftree-vectorize -funroll-loops -march=native -mtune=nati
 set(OCCA_TAG "ef7be8425e2460b1e07160b7a7e4dab41ccd510c" CACHE STRING "Git branch, tag, or hash for cloning OCCA")
 set(NEK5000_TAG "44f5904cd5c3622dd9d5fc6a3881ec7d4d498f18" CACHE STRING "Git branch, tag, or hash for cloning Nek5000")
 set(HYPRE_VER "2.20.0" CACHE STRING "Version number of HYPRE to download")
-
 set(USE_OCCA_MEM_BYTE_ALIGN "64" CACHE STRING "Memory allignment for OCCA kernels")
 set(HYPRE_DIR "" CACHE STRING "Path to external HYPRE installation")
+
+set(OCCA_CUDA_COMPILER_FLAGS "-O3 --fmad=true" CACHE STRING "CUDA flags for OCCA JIT compile")
+set(OCCA_HIP_COMPILER_FLAGS "-O3 -ffp-contract=fast" CACHE STRING "HIP flags for OCCA JIT compile")
+set(OCCA_OPENCL_COMPILER_FLAGS "-cl-std=CL2.0 -cl-mad-enable -cl-no-signed-zeros" CACHE STRING "OPENCL flags for OCCA JIT compile")
+set(OGS_MPI_SUPPORT "0" CACHE STRING "OGS GPU aware MPI")
+set(BACKEND_DEFAULT "CUDA" CACHE STRING "Default occa mode")
 
 # From OCCA's CMakeLists. All default to ON, but are verified in config tests
 #   - ENABLE_OPENMP
@@ -103,8 +107,6 @@ set (CMAKE_CXX_STANDARD 14)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE on)
 
-add_definitions(-DUSE_OCCA_MEM_BYTE_ALIGN=${USE_OCCA_MEM_BYTE_ALIGN})
-
 find_package(OpenMP)
 if (OPENMP_FOUND)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
@@ -122,7 +124,12 @@ function(set_external_flags lang)
   get_directory_property(compile_defs
           DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" COMPILE_DEFINITIONS )
   foreach(def "${compile_defs}")
-    set(ext_flags "${ext_flags} -D${def}")
+  
+    if ("${def}" STREQUAL "")
+      set(ext_flags "${ext_flags}")
+    else ()
+      set(ext_flags "${ext_flags} -D${def}")
+    endif()
   endforeach()
 
   set(EXTERNAL_${lang}_FLAGS "${ext_flags}" PARENT_SCOPE)
@@ -131,6 +138,16 @@ endfunction()
 set_external_flags("C")
 set_external_flags("CXX")
 set_external_flags("Fortran")
+
+execute_process(
+  COMMAND git log -1 --format=%h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE GIT_COMMIT_HASH
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if ("${GIT_COMMIT_HASH}" STREQUAL "")
+  set(GIT_COMMIT_HASH "no sha")
+endif()
 
 ###############################################################################
 # Generate nekrs.conf                                                       #
@@ -179,19 +196,19 @@ set(SRC
     src/io/utils.cpp
     src/core/utils/mysort.cpp
     src/core/utils/parallelSort.cpp
-    src/core/utils/occaHelpers.cpp
     src/core/utils/tinyexpr.c
     src/core/setupAide.cpp
     src/core/cfl.cpp
     src/core/filter.cpp
     src/core/bcMap.cpp
     src/core/setup.cpp
-    src/timeStepper/runTime.cpp
+    src/timeStepper/timeStepper.cpp
     src/lns/tombo.cpp
     src/cds/cds.cpp
     src/core/parReader.cpp
     src/core/configReader.cpp
     src/core/timer.cpp
+    src/core/platform.cpp
     src/linAlg/linAlg.cpp
     src/linAlg/matrixConditionNumber.cpp
     src/linAlg/matrixInverse.cpp
@@ -204,9 +221,6 @@ set(SRC
     src/plugins/lowMach.cpp
     src/udf/udf.cpp
     src/nekInterface/nekInterfaceAdapter.cpp
-    src/linearSolver/NBFPCG.cpp
-    src/linearSolver/NBPCG.cpp
-    src/linearSolver/PCG.cpp
     ${MESH_SOURCES}
     ${PARALMOND_SOURCES}
     ${ELLIPTIC_SOURCES}
@@ -214,17 +228,25 @@ set(SRC
     ${OGS_SOURCES}
 )
 
+set_property(
+   SOURCE src/lib/nekrs.cpp 
+   APPEND PROPERTY COMPILE_DEFINITIONS
+   GITCOMMITHASH="${GIT_COMMIT_HASH}"
+   NEKRS_VERSION=${PROJECT_VERSION_MAJOR}
+   NEKRS_SUBVERSION=${PROJECT_VERSION_MINOR}
+)
+
 add_library(nekrs-lib SHARED ${SRC})
 set_target_properties(nekrs-lib PROPERTIES LINKER_LANGUAGE CXX OUTPUT_NAME nekrs)
-target_link_libraries(nekrs-lib PUBLIC libocca PRIVATE HYPRE ${GSLIB})
+target_link_libraries(nekrs-lib PUBLIC libocca PRIVATE HYPRE gs ${GSLIB})
 
 target_compile_definitions(nekrs-lib PUBLIC
-    ${LIBP_DEFINES}
     -DDOGS="${CMAKE_INSTALL_PREFIX}/gatherScatter"
     -DHYPRE)
 
 target_include_directories(nekrs-lib 
   PUBLIC 
+  ${CMAKE_CURRENT_BINARY_DIR}
   src/core
   src/core/utils
   src/lib
@@ -255,8 +277,6 @@ if ("${HYPRE_DIR}" STREQUAL "")
     ${HYPRE_SOURCE_DIR}/src/krylov
     ${HYPRE_BINARY_DIR})
 endif()
-
-target_link_libraries(nekrs-lib PUBLIC libocca PRIVATE gs HYPRE)
 
 add_executable(nekrs-bin src/main.cpp)
 target_include_directories(nekrs-bin PRIVATE src/lib)
@@ -311,7 +331,6 @@ add_custom_target(tar
   COMMAND ${CMAKE_COMMAND} 
       -DDEST_DIR=${DEST_DIR} 
       -DOCCA_SOURCE_DIR=${OCCA_SOURCE_DIR}
-      -DLIBP_SOURCE_DIR=${LIBP_SOURCE_DIR}
       -DHYPRE_SOURCE_DIR=${HYPRE_SOURCE_DIR} 
       -DNEK5000_SOURCE_DIR=${NEK5000_SOURCE_DIR} 
       -P ${CMAKE_CURRENT_SOURCE_DIR}/config/maketar.cmake

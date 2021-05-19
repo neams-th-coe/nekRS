@@ -29,6 +29,7 @@
 #include <stddef.h>
 
 #include "mesh.h"
+#include "platform.hpp"
 
 void meshParallelGatherScatterSetup(mesh_t* mesh,
                                     dlong N,
@@ -36,11 +37,12 @@ void meshParallelGatherScatterSetup(mesh_t* mesh,
                                     MPI_Comm &comm,
                                     int verbose)
 {
+  
   int rank, size;
   MPI_Comm_rank(comm, &rank);
   MPI_Comm_size(comm, &size);
 
-  mesh->ogs = ogsSetup(N, globalIds, comm, verbose, mesh->device);
+  mesh->ogs = ogsSetup(N, globalIds, comm, verbose, platform->device);
 
   //use the gs to find what nodes are local to this rank
   int* minRank = (int*) calloc(N,sizeof(int));
@@ -53,16 +55,22 @@ void meshParallelGatherScatterSetup(mesh_t* mesh,
   ogsGatherScatter(minRank, ogsInt, ogsMin, mesh->ogs); //minRank[n] contains the smallest rank taking part in the gather of node n
   ogsGatherScatter(maxRank, ogsInt, ogsMax, mesh->ogs); //maxRank[n] contains the largest rank taking part in the gather of node n
 
+  int overlap = 0;
+  platform->options.compareArgs("ENABLE OVERLAP", "TRUE"); overlap = 1;
+
   // count elements that contribute to global C0 gather-scatter
   dlong globalCount = 0;
   dlong localCount = 0;
   for(dlong e = 0; e < mesh->Nelements; ++e) {
-    int isHalo = 0;
-    for(int n = 0; n < mesh->Np; ++n) {
-      dlong id = e * mesh->Np + n;
-      if ((minRank[id] != rank) || (maxRank[id] != rank)) {
-        isHalo = 1;
-        break;
+    int isHalo = 1;
+    if(overlap) {	  
+      isHalo = 0;
+      for(int n = 0; n < mesh->Np; ++n) {
+        dlong id = e * mesh->Np + n;
+        if ((minRank[id] != rank) || (maxRank[id] != rank)) {
+          isHalo = 1;
+          break;
+        }
       }
     }
     globalCount += isHalo;
@@ -76,12 +84,15 @@ void meshParallelGatherScatterSetup(mesh_t* mesh,
   localCount = 0;
 
   for(dlong e = 0; e < mesh->Nelements; ++e) {
-    int isHalo = 0;
-    for(int n = 0; n < mesh->Np; ++n) {
-      dlong id = e * mesh->Np + n;
-      if ((minRank[id] != rank) || (maxRank[id] != rank)) {
-        isHalo = 1;
-        break;
+      int isHalo = 1;
+      if(overlap) {	  
+      isHalo = 0;
+      for(int n = 0; n < mesh->Np; ++n) {
+        dlong id = e * mesh->Np + n;
+        if ((minRank[id] != rank) || (maxRank[id] != rank)) {
+          isHalo = 1;
+          break;
+        }
       }
     }
     if(isHalo)
@@ -96,9 +107,9 @@ void meshParallelGatherScatterSetup(mesh_t* mesh,
 
   if(globalCount)
     mesh->o_globalGatherElementList =
-      mesh->device.malloc(globalCount * sizeof(dlong), mesh->globalGatherElementList);
+      platform->device.malloc(globalCount * sizeof(dlong), mesh->globalGatherElementList);
 
   if(localCount)
     mesh->o_localGatherElementList =
-      mesh->device.malloc(localCount * sizeof(dlong), mesh->localGatherElementList);
+      platform->device.malloc(localCount * sizeof(dlong), mesh->localGatherElementList);
 }

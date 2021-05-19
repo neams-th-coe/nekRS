@@ -7,13 +7,6 @@
 #include "ogsKernels.hpp"
 #include "ogsInterface.h"
 
-//#define DISABLE_OOGS
-//#define OGS_ENABLE_TIMER
-
-#ifdef OGS_ENABLE_TIMER
-#include "timer.hpp"
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -86,6 +79,46 @@ static void convertPwMap(const uint *restrict map,
   }
 }
 
+static void neighborAllToAll(int unit_size, oogs_t *gs)
+{
+  ogs_t *ogs = gs->ogs;
+  struct gs_data *hgs = (gs_data*) ogs->haloGshSym;
+  const void* execdata = hgs->r.data; 
+  const struct pw_data *pwd = (pw_data*) execdata; 
+
+  {
+    uint bufOffset = 0;
+    const struct pw_comm_data *c = &pwd->comm[send];
+    for(int i = 0; i < c->n; i++) {
+      const int len = c->size[i] * unit_size;
+      gs->nbc.sendcounts[i] = len;
+      gs->nbc.senddispls[i] = bufOffset;
+      bufOffset += len;
+    }
+  }
+  {
+    uint bufOffset = 0;
+    const struct pw_comm_data *c = &pwd->comm[recv];
+    for(int i = 0; i < c->n; i++) {
+      const int len = c->size[i] * unit_size;
+      gs->nbc.recvcounts[i] = len;
+      gs->nbc.recvdispls[i] = bufOffset;
+      bufOffset += len;
+    }
+  }
+
+  unsigned char *bufRecv = (unsigned char*)gs->o_bufRecv.ptr(); 
+  unsigned char *bufSend = (unsigned char*)gs->o_bufSend.ptr(); 
+  if(gs->mode != OOGS_DEVICEMPI) {
+    ogs->device.finish(); // waiting for send buffers to be ready
+    bufRecv = (unsigned char*)gs->bufRecv;     
+    bufSend = (unsigned char*)gs->bufSend;      
+  }
+  MPI_Neighbor_alltoallv(bufSend, gs->nbc.sendcounts, gs->nbc.senddispls, MPI_UNSIGNED_CHAR,
+                         bufRecv, gs->nbc.recvcounts, gs->nbc.recvdispls, MPI_UNSIGNED_CHAR,
+                         gs->nbc.comm);
+}
+
 static void pairwiseExchange(int unit_size, oogs_t *gs)
 {
   ogs_t *ogs = gs->ogs;
@@ -94,35 +127,36 @@ static void pairwiseExchange(int unit_size, oogs_t *gs)
   const struct pw_data *pwd = (pw_data*) execdata; 
   const struct comm *comm = &hgs->comm;
 
-  if(!gs->earlyPrepostRecv) { 
+  if(!gs->earlyPrepostRecv) {
+    unsigned char *buf = (unsigned char*)gs->o_bufRecv.ptr(); 
+    if(gs->mode != OOGS_DEVICEMPI) buf = (unsigned char *)gs->bufRecv;
+
     comm_req *req = pwd->req; 
     const struct pw_comm_data *c = &pwd->comm[recv];
     const uint *p, *pe, *size=c->size;
-    uint bufOffset = 0;
     for(p=c->p,pe=p+c->n;p!=pe;++p) {
-      const size_t len = *(size++);
-      unsigned char *recvbuf = (unsigned char *)gs->bufRecv + bufOffset;
-      if(gs->mode == OOGS_DEVICEMPI) recvbuf = (unsigned char*)gs->o_bufRecv.ptr() + bufOffset;
-      MPI_Irecv((void*)recvbuf,len*unit_size,MPI_UNSIGNED_CHAR,*p,*p,comm->c,req++);
-      bufOffset += len*unit_size;
+      const int len = *(size++) * unit_size;
+      MPI_Irecv((void*)buf,len,MPI_UNSIGNED_CHAR,*p,*p,comm->c,req++);
+      buf += len;
     }
   }
 
-  { // pw exchange
-    if(gs->mode != OOGS_DEVICEMPI) ogs->device.finish(); // waiting for send buffers to be ready
+  {
+    unsigned char *buf = (unsigned char*)gs->o_bufSend.ptr();
+    if(gs->mode != OOGS_DEVICEMPI) {
+      ogs->device.finish(); // waiting for send buffers to be ready
+      buf = (unsigned char*)gs->bufSend;      
+    }
 
     comm_req *req = &pwd->req[pwd->comm[recv].n]; 
     const struct pw_comm_data *c = &pwd->comm[send];
     const uint *p, *pe, *size=c->size;
-    uint bufOffset = 0;
     for(p=c->p,pe=p+c->n;p!=pe;++p) {
-      const size_t len = *(size++);
-      unsigned char *sendbuf = (unsigned char*)gs->bufSend + bufOffset;
-      if(gs->mode == OOGS_DEVICEMPI) sendbuf = (unsigned char*)gs->o_bufSend.ptr() + bufOffset;
-      MPI_Isend((void*)sendbuf,len*unit_size,MPI_UNSIGNED_CHAR,*p,comm->id,comm->c,req++);
-      bufOffset += len*unit_size;
+      const int len = *(size++) * unit_size;
+      MPI_Isend((void*)buf,len,MPI_UNSIGNED_CHAR,*p,comm->id,comm->c,req++);
+      buf += len;
     }
-    MPI_Waitall(pwd->comm[send].n + pwd->comm[recv].n,pwd->req,MPI_STATUSES_IGNORE);
+    MPI_Waitall(pwd->comm[send].n + pwd->comm[recv].n, pwd->req, MPI_STATUSES_IGNORE);
   }
 }
 
@@ -146,9 +180,8 @@ oogs_t* oogs::setup(ogs_t *ogs, int nVec, dlong stride, const char *type, std::f
   gs->mode = gsMode;
 
   if(gsMode == OOGS_DEFAULT) return gs; 
-
-  for (int r=0;r<2;r++) {
-    if ((r==0 && gs->rank==0) || (r==1 && gs->rank>0)) {
+  for(int r = 0; r < 2; ++r){
+    if((r==0 && gs->rank == 0) || (r==1 && gs->rank > 0)){
       gs->packBufFloatAddKernel = device.buildKernel(DOGS "/okl/oogs.okl", "packBuf_floatAdd", ogs::kernelInfo);
       gs->unpackBufFloatAddKernel = device.buildKernel(DOGS "/okl/oogs.okl", "unpackBuf_floatAdd", ogs::kernelInfo);
       gs->packBufDoubleAddKernel = device.buildKernel(DOGS "/okl/oogs.okl", "packBuf_doubleAdd", ogs::kernelInfo);
@@ -159,13 +192,13 @@ oogs_t* oogs::setup(ogs_t *ogs, int nVec, dlong stride, const char *type, std::f
       gs->unpackBufDoubleMaxKernel = device.buildKernel(DOGS "/okl/oogs.okl", "unpackBuf_doubleMax", ogs::kernelInfo);
 
       if(device.mode() == "HIP" || device.mode() == "CUDA") {
-        occa::properties halfKernelInfo = ogs::kernelInfo;
         std::string fileName = DOGS;
         if(device.mode() == "CUDA") fileName += "/okl/oogs-half.cu";
         if(device.mode() == "HIP") fileName += "/okl/oogs-half.hip";
-        halfKernelInfo["okl/enabled"] = false;
-        gs->packBufFloatToHalfAddKernel = device.buildKernel(fileName.c_str(), "packBuf_halfAdd", halfKernelInfo);
-        gs->unpackBufHalfToFloatAddKernel = device.buildKernel(fileName.c_str(), "unpackBuf_halfAdd", halfKernelInfo);
+        occa::properties nativeProperties = ogs::kernelInfo;
+        nativeProperties["okl/enabled"] = false;
+        gs->packBufFloatToHalfAddKernel = device.buildKernel(fileName.c_str(), "packBuf_halfAdd", nativeProperties);
+        gs->unpackBufHalfToFloatAddKernel = device.buildKernel(fileName.c_str(), "unpackBuf_halfAdd", nativeProperties);
       }
     }
     MPI_Barrier(gs->comm);
@@ -173,98 +206,134 @@ oogs_t* oogs::setup(ogs_t *ogs, int nVec, dlong stride, const char *type, std::f
 
   if(ogs->NhaloGather == 0) return gs;
 
-  occa::properties props;
-  props["mapped"] = true;
-
-  gs->h_buffSend = ogs->device.malloc(pwd->comm[send].total*unit_size, props);
-  gs->bufSend = (unsigned char*)gs->h_buffSend.ptr(props); 
+  gs->bufSend = (unsigned char*) ogsHostMallocPinned(ogs->device, pwd->comm[send].total*unit_size, NULL, gs->o_bufSend, gs->h_buffSend);
   int *scatterOffsets = (int*) calloc(ogs->NhaloGather+1,sizeof(int));
   int *scatterIds = (int*) calloc(pwd->comm[send].total,sizeof(int));
   convertPwMap(pwd->map[send], scatterOffsets, scatterIds);
-
-  gs->o_bufSend = ogs->device.malloc(pwd->comm[send].total*unit_size);
   gs->o_scatterOffsets = ogs->device.malloc((ogs->NhaloGather+1)*sizeof(int), scatterOffsets);
   gs->o_scatterIds = ogs->device.malloc(pwd->comm[send].total*sizeof(int), scatterIds);
   free(scatterOffsets);
   free(scatterIds);
 
-  gs->h_buffRecv = ogs->device.malloc(pwd->comm[recv].total*unit_size, props);
-  gs->bufRecv = (unsigned char*)gs->h_buffRecv.ptr(props);
+  gs->bufRecv = (unsigned char*) ogsHostMallocPinned(ogs->device, pwd->comm[recv].total*unit_size, NULL, gs->o_bufRecv, gs->h_buffRecv);
   int* gatherOffsets  = (int*) calloc(ogs->NhaloGather+1,sizeof(int));
   int *gatherIds  = (int*) calloc(pwd->comm[recv].total,sizeof(int));
   convertPwMap(pwd->map[recv], gatherOffsets, gatherIds);
-
-  gs->o_bufRecv = ogs->device.malloc(pwd->comm[recv].total*unit_size);
   gs->o_gatherOffsets  = ogs->device.malloc((ogs->NhaloGather+1)*sizeof(int), gatherOffsets);
   gs->o_gatherIds  = ogs->device.malloc(pwd->comm[recv].total*sizeof(int), gatherIds);
   free(gatherOffsets);
   free(gatherIds);
- 
+
+  const int reorder = 0;
+  int* src = (int*) calloc(pwd->comm[recv].n, sizeof(int));
+  int* dst = (int*) calloc(pwd->comm[send].n, sizeof(int));
+  for(int i = 0; i < pwd->comm[recv].n; ++i) {
+    src[i] = pwd->comm[recv].p[i];
+  }
+  for(int i = 0; i < pwd->comm[send].n; ++i) {
+    dst[i] = pwd->comm[send].p[i];
+  }
+  MPI_Dist_graph_create_adjacent(gs->comm,
+                                 pwd->comm[recv].n, src, MPI_UNWEIGHTED,
+                                 pwd->comm[send].n, dst, MPI_UNWEIGHTED,
+                                 MPI_INFO_NULL, reorder, &gs->nbc.comm);
+  free(src);
+  free(dst);
+  gs->nbc.sendcounts = (int*) calloc(pwd->comm[send].n, sizeof(int));
+  gs->nbc.senddispls = (int*) calloc(pwd->comm[send].n, sizeof(int));
+  gs->nbc.recvcounts = (int*) calloc(pwd->comm[recv].n, sizeof(int));
+  gs->nbc.recvdispls = (int*) calloc(pwd->comm[recv].n, sizeof(int));
+
   std::list<oogs_mode> oogs_mode_list;
   oogs_mode_list.push_back(OOGS_DEFAULT);
   oogs_mode_list.push_back(OOGS_HOSTMPI);
   const char* env_val = std::getenv ("OGS_MPI_SUPPORT");
-  if(env_val != NULL) { 
+  if(env_val != NULL && ogs->device.mode() != "Serial") { 
     if(std::stoi(env_val)) oogs_mode_list.push_back(OOGS_DEVICEMPI);; 
   }
-
+  std::list<oogs_modeExchange> oogs_modeExchange_list;
+  oogs_modeExchange_list.push_back(OOGS_EX_PW);
+  oogs_modeExchange_list.push_back(OOGS_EX_NBC);
+ 
   if(gsMode == OOGS_AUTO) {
     if(gs->rank == 0) printf("timing oogs modes: ");
     const int Ntests = 10;
     double elapsedMin = std::numeric_limits<double>::max();
     oogs_mode fastestMode;
-    occa::memory o_q;
-    if(!stride)
-      o_q = device.malloc(ogs->N*unit_size);
-    else
-      o_q = device.malloc(stride*unit_size);
+    oogs_modeExchange fastestModeExchange;
+    int fastestPrepostRecv;
 
-    int* prepostRecv = (int*) calloc(oogs_mode_list.size(), sizeof(int));
-    for (auto const& mode : oogs_mode_list)
-    {
+    char* q = (char*) calloc(std::max(stride,ogs->N)*unit_size, sizeof(char));
+    occa::memory o_q = device.malloc(std::max(stride,ogs->N)*unit_size, q);
+
+    for (auto const& mode : oogs_mode_list) {
       gs->mode = mode;
-      prepostRecv[gs->mode] = 0; 
-      // warum-up
-      oogs::start (o_q, nVec, stride, type, ogsAdd, gs);
-      if(callback) callback();
-      oogs::finish(o_q, nVec, stride, type, ogsAdd, gs);
 
-      for(int pass = 0; pass < 2; pass++) {
-        gs->earlyPrepostRecv = pass;
-        device.finish();
-        MPI_Barrier(gs->comm);
-        const double tStart = MPI_Wtime();
-        for(int test=0;test<Ntests;++test) {
-          oogs::start (o_q, nVec, stride, type, ogsAdd, gs);
-          if(callback) callback();
-          oogs::finish(o_q, nVec, stride, type, ogsAdd, gs);
-        }
-        device.finish();
-        double elapsed = (MPI_Wtime() - tStart)/Ntests;
-        MPI_Allreduce(MPI_IN_PLACE, &elapsed, 1, MPI_DOUBLE, MPI_MAX, gs->comm);
-        if(gs->rank == 0) printf("%gs ", elapsed);
-        if(elapsed < elapsedMin){
-          fastestMode = gs->mode;
-          elapsedMin = elapsed;
-          if(pass) prepostRecv[fastestMode] = 1;
+      for (auto const& modeExchange : oogs_modeExchange_list) {
+        gs->modeExchange = modeExchange;
+
+        if(gs->modeExchange == OOGS_EX_NBC && gs->mode == OOGS_DEVICEMPI) 
+  	  continue; // not yet supported by some MPI implementations
+
+        // warum-up
+        gs->earlyPrepostRecv = 0;	
+        oogs::start (o_q, nVec, stride, type, ogsAdd, gs);
+        if(callback) callback();
+        oogs::finish(o_q, nVec, stride, type, ogsAdd, gs);
+ 
+        int nPass = 1;	
+        if(gs->modeExchange == OOGS_EX_PW) nPass = 2;
+        for(int pass = 0; pass < nPass; pass++) {
+          gs->earlyPrepostRecv = pass;
+
+	  if(gs->mode == OOGS_DEFAULT) {
+            if(!(gs->modeExchange == OOGS_EX_PW && gs->earlyPrepostRecv ==0)) continue;
+          }
+
+	  //printf("testing mode %d exchange %d earlyPrepost %d\n", gs->mode, gs->modeExchange, gs->earlyPrepostRecv);
+	  double elapsedTest[Ntests];
+          for(int test=0;test<Ntests;++test) {
+            device.finish();
+            MPI_Barrier(gs->comm);
+            const double tStart = MPI_Wtime();
+
+            oogs::start (o_q, nVec, stride, type, ogsAdd, gs);
+            if(callback) callback();
+            oogs::finish(o_q, nVec, stride, type, ogsAdd, gs);
+
+            elapsedTest[test] = MPI_Wtime() - tStart;
+          }
+          MPI_Allreduce(MPI_IN_PLACE, elapsedTest, Ntests, MPI_DOUBLE, MPI_MIN, gs->comm);
+	  const double elapsed = elapsedTest[0];
+          if(gs->rank == 0) printf("%gs ", elapsed);
+          if(elapsed < elapsedMin){
+            elapsedMin = elapsed;
+	    fastestMode = gs->mode;
+            fastestModeExchange = gs->modeExchange;
+            fastestPrepostRecv = gs->earlyPrepostRecv;
+          }
         }
       }
     }
     MPI_Bcast(&fastestMode, 1, MPI_INT, 0, gs->comm);
-    MPI_Bcast(prepostRecv, oogs_mode_list.size(), MPI_INT, 0, gs->comm);
+    MPI_Bcast(&fastestModeExchange, 1, MPI_INT, 0, gs->comm);
+    MPI_Bcast(&fastestPrepostRecv, 1, MPI_INT, 0, gs->comm);
     gs->mode = fastestMode;
-    gs->earlyPrepostRecv = prepostRecv[gs->mode];
+    gs->modeExchange = fastestModeExchange;
+    gs->earlyPrepostRecv = fastestPrepostRecv;
     o_q.free();
-    free(prepostRecv);
+    free(q);
   } else {
     gs->mode = gsMode;
+    gs->modeExchange = OOGS_EX_PW;
     gs->earlyPrepostRecv = 0;
   }
 
 #ifdef DISABLE_OOGS
   gs->mode = OOGS_DEFAULT;
 #endif
-  if(gs->rank == 0) printf("used mode: %d.%d\n", gs->mode, gs->earlyPrepostRecv);
+  MPI_Barrier(gs->comm);
+  if(gs->rank == 0) printf("used config: %d.%d.%d\n", gs->mode, gs->modeExchange, gs->earlyPrepostRecv);
 
   return gs; 
 }
@@ -280,22 +349,21 @@ static void packBuf(oogs_t *gs,
                     const  dlong Ngather,
                     const int k,
                     const dlong stride,
-                    occa::memory o_gstarts,
-                    occa::memory o_gids,
-                    occa::memory o_sstarts,
-                    occa::memory o_sids,
+                    occa::memory &o_gstarts,
+                    occa::memory &o_gids,
+                    occa::memory &o_sstarts,
+                    occa::memory &o_sids,
                     const char* type,
                     const char* op,
-                    occa::memory  o_v,
-                    occa::memory  o_gv)
+                    occa::memory  &o_v,
+                    occa::memory  &o_gv)
 {
   if ((!strcmp(type, "floatCommHalf"))&&(!strcmp(op, ogsAdd))) {
-    const int threadBlockSize = 256;
     occa::dim outer, inner;
     outer.dims = 1;
     inner.dims = 1;
-    outer[0] = (Ngather * k + threadBlockSize - 1) / threadBlockSize;
-    inner[0] = threadBlockSize;
+    outer[0] = (Ngather * k + BLOCKSIZE - 1) / BLOCKSIZE;
+    inner[0] = BLOCKSIZE;
     gs->packBufFloatToHalfAddKernel.setRunDims(outer, inner);
     gs->packBufFloatToHalfAddKernel(Ngather, k, stride, o_gstarts, o_gids, o_sstarts, o_sids, o_v, o_gv);
   } else if (!strcmp(type, "float") && !strcmp(op, ogsAdd)) {
@@ -316,22 +384,21 @@ static void unpackBuf(oogs_t *gs,
                       const  dlong Ngather,
                       const int k,
                       const dlong stride,
-                      occa::memory o_gstarts,
-                      occa::memory o_gids,
-                      occa::memory o_sstarts,
-                      occa::memory o_sids,
+                      occa::memory &o_gstarts,
+                      occa::memory &o_gids,
+                      occa::memory &o_sstarts,
+                      occa::memory &o_sids,
                       const char* type,
                       const char* op,
-                      occa::memory  o_v,
-                      occa::memory  o_gv)
+                      occa::memory  &o_v,
+                      occa::memory  &o_gv)
 {
   if ((!strcmp(type, "floatCommHalf"))&&(!strcmp(op, ogsAdd))) {
-    const int threadBlockSize = 256;
     occa::dim outer, inner;
     outer.dims = 1;
     inner.dims = 1;
-    outer[0] = (Ngather * k + threadBlockSize - 1) / threadBlockSize;
-    inner[0] = threadBlockSize;
+    outer[0] = (Ngather * k + BLOCKSIZE - 1) / BLOCKSIZE;
+    inner[0] = BLOCKSIZE;
     gs->unpackBufHalfToFloatAddKernel.setRunDims(outer, inner);
     gs->unpackBufHalfToFloatAddKernel(Ngather, k, stride, o_gstarts, o_gids, o_sstarts, o_sids, o_v, o_gv);
   } else if (!strcmp(type, "float") && !strcmp(op, ogsAdd)) {
@@ -355,31 +422,19 @@ void reallocBuffers(int unit_size, oogs_t *gs)
   const void* execdata = hgs->r.data;
   const struct pw_data *pwd = (pw_data*) execdata;
 
-  if (ogs::o_haloBuf.size() < ogs->NhaloGather*unit_size) {
-    if (ogs::o_haloBuf.size()) ogs::o_haloBuf.free();
-    ogs::haloBuf = ogsHostMallocPinned(ogs->device, ogs->NhaloGather*unit_size, NULL, ogs::o_haloBuf, ogs::h_haloBuf);
-  }
   if (gs->o_bufSend.size() < pwd->comm[send].total*unit_size) {
-    occa::properties props;
-    props["mapped"] = true;
     if(gs->o_bufSend.size()) gs->o_bufSend.free();
-    gs->o_bufSend = ogs->device.malloc(pwd->comm[send].total*unit_size);
     if(gs->h_buffSend.size()) gs->h_buffSend.free();
-    gs->h_buffSend = ogs->device.malloc(pwd->comm[send].total*unit_size, props);
-    gs->bufSend = (unsigned char*)gs->h_buffSend.ptr(props);
+    gs->bufSend = (unsigned char*) ogsHostMallocPinned(ogs->device, pwd->comm[send].total*unit_size, NULL, gs->o_bufSend, gs->h_buffSend);
   }
   if (gs->o_bufRecv.size() < pwd->comm[recv].total*unit_size) {
-    occa::properties props;
-    props["mapped"] = true;
     if(gs->o_bufRecv.size()) gs->o_bufRecv.free();
-    gs->o_bufRecv = ogs->device.malloc(pwd->comm[recv].total*unit_size);
     if(gs->h_buffRecv.size()) gs->h_buffRecv.free();
-    gs->h_buffRecv = ogs->device.malloc(pwd->comm[recv].total*unit_size, props);
-    gs->bufRecv = (unsigned char*)gs->h_buffRecv.ptr(props);
+    gs->bufRecv = (unsigned char*) ogsHostMallocPinned(ogs->device, pwd->comm[recv].total*unit_size, NULL, gs->o_bufRecv, gs->h_buffRecv);
   }
 }
 
-void oogs::start(occa::memory o_v, const int k, const dlong stride, const char *_type, const char *op, oogs_t *gs) 
+void oogs::start(occa::memory &o_v, const int k, const dlong stride, const char *_type, const char *op, oogs_t *gs) 
 {
   size_t Nbytes;
   ogs_t *ogs = gs->ogs; 
@@ -395,7 +450,7 @@ void oogs::start(occa::memory o_v, const int k, const dlong stride, const char *
   else if (!strcmp(type, "long long int"))
     Nbytes = sizeof(long long int);
 
-  if (!strcmp(_type, "floatCommHalf") && ogs->device.mode() == "SERIAL"){
+  if (!strcmp(_type, "floatCommHalf") && ogs->device.mode() == "Serial"){
     if(gs->rank == 0)
       std::cout << "ERROR: Current backend does not support floatCommHalf!\n";
     exit(-1);
@@ -416,7 +471,10 @@ void oogs::start(occa::memory o_v, const int k, const dlong stride, const char *
     packBuf(gs, ogs->NhaloGather, k, stride, ogs->o_haloGatherOffsets, ogs->o_haloGatherIds, 
             gs->o_scatterOffsets, gs->o_scatterIds, _type, op, o_v, gs->o_bufSend);
 
-    if(gs->earlyPrepostRecv) { 
+    if(gs->earlyPrepostRecv) {
+      unsigned char *buf = (unsigned char*)gs->o_bufRecv.ptr(); 
+      if(gs->mode != OOGS_DEVICEMPI) buf = (unsigned char *)gs->bufRecv;
+
       struct gs_data *hgs = (gs_data*) ogs->haloGshSym;
       const void* execdata = hgs->r.data;
       const struct pw_data *pwd = (pw_data*) execdata;
@@ -425,13 +483,10 @@ void oogs::start(occa::memory o_v, const int k, const dlong stride, const char *
       int unit_size = Nbytes*k;
       const struct pw_comm_data *c = &pwd->comm[recv];
       const uint *p, *pe, *size=c->size;
-      uint bufOffset = 0;
       for(p=c->p,pe=p+c->n;p!=pe;++p) {
-        const size_t len = *(size++);
-        unsigned char *recvbuf = (unsigned char *)gs->bufRecv + bufOffset;
-        if(gs->mode == OOGS_DEVICEMPI) recvbuf = (unsigned char*)gs->o_bufRecv.ptr() + bufOffset;
-        MPI_Irecv((void*)recvbuf,len*unit_size,MPI_UNSIGNED_CHAR,*p,*p,gs->comm,req++);
-        bufOffset += len*unit_size;
+        const size_t len = *(size++) * unit_size;
+        MPI_Irecv((void*)buf,len*unit_size,MPI_UNSIGNED_CHAR,*p,*p,gs->comm,req++);
+        buf += len;
       }
     }
 
@@ -439,7 +494,7 @@ void oogs::start(occa::memory o_v, const int k, const dlong stride, const char *
   }
 }
 
-void oogs::finish(occa::memory o_v, const int k, const dlong stride, const char *_type, const char *op, oogs_t *gs) 
+void oogs::finish(occa::memory &o_v, const int k, const dlong stride, const char *_type, const char *op, oogs_t *gs) 
 {
   size_t Nbytes;
   ogs_t *ogs = gs->ogs; 
@@ -451,7 +506,7 @@ void oogs::finish(occa::memory o_v, const int k, const dlong stride, const char 
   else if (!strcmp(_type, "double"))
     Nbytes = sizeof(double);
 
-  if (!strcmp(_type, "floatCommHalf") && ogs->device.mode() == "SERIAL"){
+  if (!strcmp(_type, "floatCommHalf") && ogs->device.mode() == "Serial"){
     if(gs->rank == 0)
       std::cout << "ERROR: Current backend does not support floatCommHalf!\n";
     exit(-1);
@@ -476,24 +531,24 @@ void oogs::finish(occa::memory o_v, const int k, const dlong stride, const char 
     struct gs_data *hgs = (gs_data*) ogs->haloGshSym;
     const void* execdata = hgs->r.data;
     const struct pw_data *pwd = (pw_data*) execdata;
+
     if(gs->mode == OOGS_HOSTMPI)
       gs->o_bufSend.copyTo(gs->bufSend, pwd->comm[send].total*Nbytes*k, 0, "async: true");
 
-#ifdef OGS_ENABLE_TIMER
-    timer::hostTic("oogsMPI",1);
-#endif
-    pairwiseExchange(Nbytes*k, gs);
-#ifdef OGS_ENABLE_TIMER
-    timer::hostToc("oogsMPI");
-#endif
+    ogsHostTic(gs->comm, 1);
+    if(gs->modeExchange == OOGS_EX_NBC)
+      neighborAllToAll(Nbytes*k, gs);
+    else
+      pairwiseExchange(Nbytes*k, gs);
+    ogsHostToc();
 
     if(gs->mode == OOGS_HOSTMPI)
       gs->o_bufRecv.copyFrom(gs->bufRecv,pwd->comm[recv].total*Nbytes*k, 0, "async: true");
 
     unpackBuf(gs, ogs->NhaloGather, k, stride, gs->o_gatherOffsets, gs->o_gatherIds, 
               ogs->o_haloGatherOffsets, ogs->o_haloGatherIds, _type, op, gs->o_bufRecv, o_v);
-    ogs->device.finish();
 
+    ogs->device.finish();
     ogs->device.setStream(ogs::defaultStream);
   }
 }
@@ -502,7 +557,7 @@ void oogs::startFinish(void *v, const int k, const dlong stride, const char *typ
 {
   ogsGatherScatterMany(v, k, stride, type, op, h->ogs);
 }
-void oogs::startFinish(occa::memory o_v, const int k, const dlong stride, const char *type, const char *op, oogs_t *h)
+void oogs::startFinish(occa::memory &o_v, const int k, const dlong stride, const char *type, const char *op, oogs_t *h)
 {
    start(o_v, k, stride, type, op, h);
    finish(o_v, k, stride, type, op, h);

@@ -1,0 +1,24 @@
+[GENERAL] 
+#verbose = true
+polynomialOrder = 7
+
+[PRESSURE]
+solver = pfgmres+20
+residualTol = 1e-8
+#preconditioner = Jacobi 
+smootherType = Chebyshev+ASM+1
+pMultigridCoarsening = 7,5,3,1
+#galerkinCoarseOperator = true
+residualProj = false
+
+[VELOCITY]
+density = 1.0
+viscosity = 1.0
+
+#[BOOMERAMG]
+#coarsenType = 8 
+#interpolationType = 6
+#smootherType = 16
+#iterations = 1
+#strongThreshold = 0.25
+#nonGalerkinTol = 0.0
