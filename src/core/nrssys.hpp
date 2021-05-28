@@ -57,13 +57,16 @@
 #define dlongString "long long int"
 #endif
 
+// Workaround for https://github.com/open-mpi/ompi/issues/5157
+#define OMPI_SKIP_MPICXX 1
+
 #include <mpi.h>
 #include "occa.hpp"
 #include "ogs.hpp"
 #include "setupAide.hpp"
 
-#define NEKRS_VERSION "20"
-#define NEKRS_SUBVERSION "1"
+struct platform_t;
+extern platform_t* platform;
 
 #define EXIT(a)  { fflush(stdout); MPI_Finalize(); exit(a); }
 #define ABORT(a) { fflush(stdout); MPI_Abort(MPI_COMM_WORLD,a); }
