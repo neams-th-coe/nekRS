@@ -34,11 +34,12 @@
 
 #include "nrssys.hpp"
 #include "mesh3D.h"
-#include "parAlmond.hpp"
+#include "amgSolver/parAlmond/parAlmond.hpp"
 #include "ellipticPrecon.h"
 #include "platform.hpp"
 
 #include "timer.hpp"
+
 #define ELLIPTIC_ENABLE_TIMER
 
 class ResidualProjection;
@@ -189,6 +190,9 @@ elliptic_t* ellipticBuildMultigridLevelFine(elliptic_t* elliptic);
 
 void ellipticPreconditioner(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_z);
 void ellipticPreconditionerSetup(elliptic_t* elliptic, ogs_t* ogs, occa::properties &kernelInfo);
+
+void ellipticSEMFEMSetup(elliptic_t*);
+void ellipticSEMFEMSolve(elliptic_t*, occa::memory&, occa::memory&);
 
 void ellipticSolve(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x);
 

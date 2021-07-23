@@ -19,7 +19,7 @@ Capabilities:
 * ALE formulation for moving mesh support
 * VisIt & Paraview support for data analysis and visualization
 
-Note, the code is an prototype so it's very likely that you run into undiscovered issues. Moreover it's evolving quickly so things might change from one version to another without being backward compatible. 
+Note, the code is an early state so it's very likely that you run into undiscovered issues. Moreover it's evolving quickly so things might change from one version to another without being backward compatible. 
 
 
 ## Build Instructions
@@ -31,26 +31,29 @@ Requirements:
 * CMake version 3.11 or later
 * bash
 
-Download the latest release tarball
+Download the latest release tarball (recommended)
 
 ```sh
-wget https://github.com/Nek5000/nekRS/archive/refs/tags/v21.0.tar.gz 
-tar -zxf v21.0.tar.gz 
+wget https://github.com/Nek5000/nekRS/archive/refs/tags/v21.1.tar.gz 
+tar -zxf v21.1.tar.gz 
 ```
-
 
 or clone our GitHub repository:
 
 ```sh
 git clone https://github.com/Nek5000/nekRS.git
 ```
+The git master branch always points to the latest release, the next branch
+is a special development branch that contains all the new features that will be released at the next release cycle.
 
+#
 To build and install the code just run:
 
 ```sh
-./makenrs
+./nrsconfig
+cmake --build ./build --target install -j8
 ```
-Build settings can be customized in the script.
+Build settings can be customized by environment variables. 
 
 
 ## Setting the Enviroment
@@ -78,10 +81,10 @@ Please check the examples in `bin`.
 For documentation, see our [readthedocs page](https://nekrs.readthedocs.io/en/latest/).
 
 ## Discussion Group
-Please visit [Discussions](https://github.com/Nek5000/nekRS/discussions) on [GitHub](https://github.com/Nek5000/nekRS). Here we help, find solutions, share ideas, and follow discussions.
+Please visit [GitHub Discussions](https://github.com/Nek5000/nekRS/discussions). Here we help, find solutions, share ideas, and follow discussions.
 
 ## Reporting Bugs
-nekRS is hosted on GitHub and all bugs are reported and tracked through the [Issues](https://github.com/Nek5000/nekRS/issues) feature on GitHub. If you are having trouble installing the code or getting your model to run properly, you should first vist our [dicussions](https://github.com/Nek5000/nekRS/discussions) forum on GitHub.
+nekRS is hosted on GitHub and all bugs are reported and tracked through the [Issues](https://github.com/Nek5000/nekRS/issues) feature. If you are having trouble installing the code or getting your model to run properly, you should first vist our discussion group.
 
 ## Contributing
 Our project is hosted on [GitHub](https://github.com/Nek5000/nekRS) and everbody is welcome to become a part of it.
