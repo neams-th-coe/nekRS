@@ -10,6 +10,7 @@
 #include "platform.hpp"
 #include "nrssys.hpp"
 #include "linAlg.hpp"
+#include "amgx.h"
 
 // extern variable from nrssys.hpp
 platform_t* platform;
@@ -69,8 +70,7 @@ void setup(MPI_Comm comm_in, int buildOnly, int commSizeTarget,
   srand48((long int) rank);
 
   configRead(comm);
-
-  string setupFile = _setupFile + ".par";
+  oogs::gpu_mpi(std::stoi(getenv("NEKRS_GPU_MPI")));
   setOccaVars(cacheDir);
 
   if (rank == 0) {
@@ -84,7 +84,8 @@ void setup(MPI_Comm comm_in, int buildOnly, int commSizeTarget,
 
   nrs = new nrs_t();
 
-  nrs->par = new inipp::Ini<char>();	   
+  nrs->par = new inipp::Ini<char>();	  
+  string setupFile = _setupFile + ".par";
   options = parRead((void*) nrs->par, setupFile, comm);
 
   options.setArgs("BUILD ONLY", "FALSE");
@@ -137,18 +138,9 @@ void setup(MPI_Comm comm_in, int buildOnly, int commSizeTarget,
     nrs->cds->o_prop.copyFrom(nrs->cds->prop);
   }
 
-  if(udf.properties) {
-    occa::memory o_S = platform->o_mempool.slice0;
-    occa::memory o_SProp = platform->o_mempool.slice0;
-    if(nrs->Nscalar) {
-      o_S = nrs->cds->o_S;
-      o_SProp = nrs->cds->o_prop;
-    }
-    udf.properties(nrs, startTime(), nrs->o_U, o_S,
-                   nrs->o_prop, o_SProp);
-    nrs->o_prop.copyTo(nrs->prop);
-    if(nrs->Nscalar) nrs->cds->o_prop.copyTo(nrs->cds->prop);
-  }
+  evaluateProperties(nrs, startTime());
+  nrs->o_prop.copyTo(nrs->prop);
+  if(nrs->Nscalar) nrs->cds->o_prop.copyTo(nrs->cds->prop);
 
   nek::ocopyToNek(startTime(), 0);
 
@@ -156,7 +148,7 @@ void setup(MPI_Comm comm_in, int buildOnly, int commSizeTarget,
   const double setupTime = platform->timer.query("setup", "DEVICE:MAX");
   if(rank == 0) {
     cout << "\nsettings:\n" << endl << options << endl;
-    cout << "device memory usage: " << platform->device.memoryAllocated()/1e9 << " GB" << endl;
+    cout << "occa memory usage: " << platform->device.memoryAllocated()/1e9 << " GB" << endl;
     cout << "initialization took " << setupTime << " s" << endl;
   }
   fflush(stdout);
@@ -278,7 +270,10 @@ void* nrsPtr(void)
   return nrs;
 }
 
-
+void finalize(void)
+{
+  AMGXfree();
+}
 
 void printRuntimeStatistics()
 {
