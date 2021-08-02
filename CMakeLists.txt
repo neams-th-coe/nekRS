@@ -1,11 +1,15 @@
 cmake_minimum_required(VERSION 3.11)
 project(NekRS LANGUAGES C CXX Fortran VERSION 21.1)
 
+if(${CMAKE_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
+  MESSAGE(FATAL_ERROR "Error:  In-place builds are not supported. Please create a separate build directory")
+endif(${CMAKE_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
+
 include(FortranCInterface)
 include(ExternalProject)
 include(FetchContent)
 
-set_property(GLOBAL PROPERTY RULE_MESSAGES OFF)
+#set_property(GLOBAL PROPERTY RULE_MESSAGES OFF)
 set(CMAKE_INSTALL_MESSAGE NEVER)
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 set(FETCHCONTENT_QUIET on)
@@ -18,7 +22,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/occa/lib")
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/elliptic")
-set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/parAlmond")
+set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/amgSolver/parAlmond")
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/libparanumal")
 set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_INSTALL_PREFIX}/gatherScatter")
 
@@ -46,8 +50,6 @@ set(HYPRE_DIR "" CACHE STRING "Path to external HYPRE installation")
 set(OCCA_CUDA_COMPILER_FLAGS "-O3 --fmad=true" CACHE STRING "CUDA flags for OCCA JIT compile")
 set(OCCA_HIP_COMPILER_FLAGS "-O3 -ffp-contract=fast" CACHE STRING "HIP flags for OCCA JIT compile")
 set(OCCA_OPENCL_COMPILER_FLAGS "-cl-std=CL2.0 -cl-mad-enable -cl-no-signed-zeros" CACHE STRING "OPENCL flags for OCCA JIT compile")
-set(OGS_MPI_SUPPORT "0" CACHE STRING "OGS GPU aware MPI")
-set(BACKEND_DEFAULT "CUDA" CACHE STRING "Default occa mode")
 
 # From OCCA's CMakeLists. All default to ON, but are verified in config tests
 #   - ENABLE_OPENMP
@@ -56,6 +58,11 @@ set(BACKEND_DEFAULT "CUDA" CACHE STRING "Default occa mode")
 #   - ENABLE_HIP
 #   - ENABLE_METAL
 #   - ENABLE_MPI
+
+set(ENABLE_METAL OFF CACHE BOOL "Enable OCCA Metal support")
+set(ENABLE_AMGX OFF CACHE BOOL "Enable NVIDIA AMGX support")
+set(GPU_MPI "0" CACHE STRING "GPU aware MPI")
+set(BACKEND_DEFAULT "SERIAL" CACHE STRING "Default occa mode")
 
 ###############################################################################
 # Check compiler/MPI vendor, version and Fortran/C compatibility              #
@@ -99,7 +106,7 @@ if (NOT FortranCInterface_VERIFIED_CXX)
     message(WARNING "C and Fortran may not work properly")
 endif()
 
-## Use c++14
+set (CMAKE_C_STANDARD 99)
 set (CMAKE_CXX_STANDARD 14)
 
 ###############################################################################
@@ -151,19 +158,20 @@ if ("${GIT_COMMIT_HASH}" STREQUAL "")
 endif()
 
 ###############################################################################
-# Generate nekrs.conf                                                       #
-###############################################################################
-
-configure_file(
-  ${CMAKE_CURRENT_LIST_DIR}/config/nekrs.conf.in
-  ${CMAKE_INSTALL_PREFIX}/nekrs.conf
-  @ONLY)
-
-###############################################################################
 # Build OCCA                                                                  #
 ###############################################################################
-
 include(config/occa.cmake)
+set(ENABLE_CUDA ${OCCA_CUDA_ENABLED})
+set(ENABLE_HIP ${OCCA_HIP_ENABLED})
+set(ENABLE_OPENCL ${OCCA_OPENCL_ENABLED})
+
+###############################################################################
+# Build AMGX                                                                  #
+###############################################################################
+
+if(ENABLE_CUDA AND ENABLE_AMGX)
+  add_subdirectory(3rd_party/AMGX)
+endif()
 
 ###############################################################################
 # Build HYPRE
@@ -200,7 +208,8 @@ set(SRC
     src/core/utils/tinyexpr.c
     src/core/setupAide.cpp
     src/core/cfl.cpp
-    src/core/filter.cpp
+    src/regularization/filter.cpp
+    src/regularization/avm.cpp
     src/core/bcMap.cpp
     src/core/setup.cpp
     src/timeStepper/timeStepper.cpp
@@ -235,6 +244,7 @@ set_property(
    GITCOMMITHASH="${GIT_COMMIT_HASH}"
    NEKRS_VERSION=${PROJECT_VERSION_MAJOR}
    NEKRS_SUBVERSION=${PROJECT_VERSION_MINOR}
+   NEKRS_PATCHVERSION=${PROJECT_VERSION_PATCH}
 )
 
 add_library(nekrs-lib SHARED ${SRC})
@@ -253,6 +263,7 @@ target_include_directories(nekrs-lib
   src/lib
   src/io
   src/udf
+  src/regularization
   src/linAlg
   src/timeStepper
   src/lns
@@ -262,6 +273,9 @@ target_include_directories(nekrs-lib
   ${OGS_SOURCE_DIR}/include
   ${OGS_SOURCE_DIR}
   ${ELLIPTIC_SOURCE_DIR}
+  PRIVATE
+  ${ELLIPTIC_SOURCE_DIR}/amgSolver/hypre
+  ${ELLIPTIC_SOURCE_DIR}/amgSolver/amgx
   ${PARALMOND_SOURCE_DIR}
 )
 
@@ -279,10 +293,49 @@ if ("${HYPRE_DIR}" STREQUAL "")
     ${HYPRE_BINARY_DIR})
 endif()
 
+if(ENABLE_AMGX AND ENABLE_CUDA)
+  target_compile_definitions(nekrs-lib PUBLIC -DENABLE_AMGX)
+  target_link_libraries(nekrs-lib PUBLIC amgxsh)
+  target_include_directories(nekrs-lib PUBLIC 3rd_party/AMGX/base/include)
+endif()
+
 add_executable(nekrs-bin src/main.cpp)
 target_include_directories(nekrs-bin PRIVATE src/lib)
 set_target_properties(nekrs-bin PROPERTIES LINKER_LANGUAGE CXX OUTPUT_NAME nekrs)
 target_link_libraries(nekrs-bin nekrs-lib)
+
+message(NOTICE "")
+message(NOTICE "----------------- Summary -----------------")
+message(NOTICE "Installation directory: ${CMAKE_CURRENT_SOURCE_DIR}") 
+message(NOTICE "C compiler: ${CMAKE_C_COMPILER}")
+message(NOTICE "C++ compiler: ${CMAKE_CXX_COMPILER}")
+message(NOTICE "Fortran compiler: ${CMAKE_Fortran_COMPILER}")
+message(NOTICE "Default backend : ${BACKEND_DEFAULT}")
+message(NOTICE "CPU backend compiler: ${OCCA_CXX} (flags: ${OCCA_CXXFLAGS})")
+if(ENABLE_CUDA) 
+  message(NOTICE "NVIDIA CUDA backend enabled (flags: ${OCCA_CUDA_COMPILER_FLAGS})")
+endif()
+if(ENABLE_HIP) 
+  message(NOTICE "AMD HIP backend enabled (flags: ${OCCA_HIP_COMPILER_FLAGS})")
+endif()
+if(ENABLE_OPENCL) 
+  message(NOTICE "OPENCL backend enabled (flags: ${OCCA_OPENCL_COMPILER_FLAGS})")
+endif()
+if(GPU_MPI)
+  message(NOTICE "GPU aware MPI support enabled")
+else(GPU_MPI)
+  message(NOTICE "GPU aware MPI support disabled!")
+endif()
+message(NOTICE "-------------------------------------------")
+
+###############################################################################
+# Generate nekrs.conf                                                       #
+###############################################################################
+
+configure_file(
+  ${CMAKE_CURRENT_LIST_DIR}/config/nekrs.conf.in
+  ${CMAKE_INSTALL_PREFIX}/nekrs.conf
+  @ONLY)
 
 #################################################################################
 ### Install                                                                     #
@@ -338,4 +391,3 @@ add_custom_target(tar
   COMMAND tar -czf ${TAR_NAME} ${DEST_DIR}
   COMMAND rm -rf ${DEST_DIR}
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-

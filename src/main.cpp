@@ -113,10 +113,12 @@ int main(int argc, char** argv)
   cmdOptions* cmdOpt = processCmdLineOptions(argc, argv);
 
   if (cmdOpt->debug) {
-    if (rank == 0) {
-      std::cout << "Attach debugger, then press enter to continue\n";
-      std::cin.get();
-    }
+    for(int currRank = 0; currRank < size; ++currRank)
+      if(rank == currRank) printf("rank %d: pid<%d>\n", rank, ::getpid());
+    fflush(stdout); 
+    MPI_Barrier(comm);
+    if (rank == 0) std::cout << "Attach debugger, then press enter to continue\n";
+    if (rank == 0) std::cin.get(); 
     MPI_Barrier(comm);
   }
   if (cmdOpt->debug) feraiseexcept(FE_ALL_EXCEPT);
@@ -130,6 +132,7 @@ int main(int argc, char** argv)
                cmdOpt->backend, cmdOpt->deviceID);
 
   if (cmdOpt->buildOnly) {
+    nekrs::finalize();
     MPI_Finalize();
     return EXIT_SUCCESS;
   }
@@ -188,6 +191,7 @@ int main(int argc, char** argv)
   }
   fflush(stdout);
 
+  nekrs::finalize();
   MPI_Finalize();
   return EXIT_SUCCESS;
 }

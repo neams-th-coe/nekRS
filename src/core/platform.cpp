@@ -110,6 +110,7 @@ void memPool_t::allocate(const dlong offset, const dlong fields)
 }
 void deviceMemPool_t::allocate(memPool_t& hostMemory, const dlong offset, const dlong fields)
 {
+  bytesAllocated = fields * offset * sizeof(dfloat);
   o_ptr = platform->device.malloc(offset*fields*sizeof(dfloat), hostMemory.slice0);
   slice0 = o_ptr.slice(0 * offset * sizeof(dfloat));
   slice1 = o_ptr.slice(1 * offset * sizeof(dfloat));
@@ -244,7 +245,6 @@ device_t::device_t(setupAide& options, MPI_Comm comm)
     sprintf(deviceConfig, "{mode: 'OpenMP'}");
   }else if(strcasecmp(requestedOccaMode.c_str(), "CPU") == 0 ||
            strcasecmp(requestedOccaMode.c_str(), "SERIAL") == 0) {
-    sprintf(deviceConfig, "{mode: 'Serial', memory: { use_host_pointer: true }}");
     sprintf(deviceConfig, "{mode: 'Serial'}");
     options.setArgs("THREAD MODEL", "SERIAL");
     options.getArgs("THREAD MODEL", requestedOccaMode);
@@ -265,10 +265,20 @@ device_t::device_t(setupAide& options, MPI_Comm comm)
     ABORT(EXIT_FAILURE);
   } 
 
-
+  // overwrite compiler settings to ensure
+  // compatability of libocca and kernelLauchner 
+  if(this->mode() != "Serial") {
+    std::string buf;
+    buf.assign(getenv("NEKRS_CXX"));
+    setenv("OCCA_CXX", buf.c_str(), 1);
+    buf.assign(getenv("NEKRS_CXXFLAGS"));
+    setenv("OCCA_CXXFLAGS", buf.c_str(), 1);
+  }
 
   int Nthreads = 1;
   if(this->mode() != "OpenMP") omp_set_num_threads(Nthreads);
 
   bufferSize = 0;
+
+  _device_id = device_id;
 }
