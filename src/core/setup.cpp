@@ -2,10 +2,11 @@
 #include "meshSetup.hpp"
 #include "nekInterfaceAdapter.hpp"
 #include "udf.hpp"
-#include "filter.hpp"
 #include "bcMap.hpp"
 #include <vector>
 #include <map>
+#include "filter.hpp"
+#include "avm.hpp"
 
 namespace{
 cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties &kernelInfoBC);
@@ -324,8 +325,23 @@ void nrsSetup(MPI_Comm comm, setupAide &options, nrs_t *nrs)
   nrs->o_EToB = device.malloc(mesh->Nelements * mesh->Nfaces * sizeof(int),nrs->EToB);
   nrs->o_VmapB = device.malloc(mesh->Nelements * mesh->Np * sizeof(int), nrs->VmapB);
 
-  if(platform->options.compareArgs("FILTER STABILIZATION", "RELAXATION"))
-    filterSetup(nrs);
+  if(platform->options.compareArgs("FILTER STABILIZATION", "RELAXATION")){
+
+    nrs->filterNc = -1;
+    dfloat filterS;
+    platform->options.getArgs("HPFRT STRENGTH", filterS);
+    platform->options.getArgs("HPFRT MODES", nrs->filterNc);
+    filterS = -1.0 * fabs(filterS);
+    nrs->filterS = filterS;
+
+    dfloat* A = filterSetup(nrs->meshV, nrs->filterNc);
+
+    const dlong Nmodes = nrs->meshV->N + 1;
+
+    nrs->o_filterMT = platform->device.malloc(Nmodes * Nmodes * sizeof(dfloat), A);
+
+    free(A);
+  }
 
   // build kernels
   string fileName, kernelName;
@@ -502,7 +518,7 @@ void nrsSetup(MPI_Comm comm, setupAide &options, nrs_t *nrs)
       nrs->maskCopyKernel =
         device.buildKernel(fileName, kernelName, kernelInfo);
 
-      fileName = oklpath + "nrs/filterRT" + suffix + ".okl";
+      fileName = oklpath + "nrs/regularization/filterRT" + suffix + ".okl";
       kernelName = "filterRT" + suffix;
       nrs->filterRTKernel =
         device.buildKernel(fileName, kernelName, kernelInfo);
@@ -654,7 +670,6 @@ void nrsSetup(MPI_Comm comm, setupAide &options, nrs_t *nrs)
                           options.getArgs("VELOCITY PARALMOND CHEBYSHEV DEGREE"));
     nrs->vOptions.setArgs("PARALMOND AGGREGATION STRATEGY",
                           options.getArgs("VELOCITY PARALMOND AGGREGATION STRATEGY"));
-    nrs->vOptions.setArgs("FIXED ITERATION COUNT", options.getArgs("VELOCITY FIXED ITERATION COUNT"));
     nrs->vOptions.setArgs("MAXIMUM ITERATIONS", options.getArgs("VELOCITY MAXIMUM ITERATIONS"));
 
     // coeff used by ellipticSetup to detect allNeumann
@@ -749,9 +764,9 @@ void nrsSetup(MPI_Comm comm, setupAide &options, nrs_t *nrs)
     if(platform->options.compareArgs("VELOCITY BLOCK SOLVER", "TRUE")) {
       nrs->uvwSolver->name = "velocity";
     } else {
-      nrs->uSolver->name = "velocity";
-      nrs->vSolver->name = "velocity";
-      nrs->wSolver->name = "velocity";
+      nrs->uSolver->name = "x-velocity";
+      nrs->vSolver->name = "y-velocity";
+      nrs->wSolver->name = "v-velocity";
     }
   } // flow
 
@@ -769,6 +784,8 @@ void nrsSetup(MPI_Comm comm, setupAide &options, nrs_t *nrs)
     nrs->pOptions.setArgs("DISCRETIZATION",       options.getArgs("PRESSURE DISCRETIZATION"));
     nrs->pOptions.setArgs("BASIS",                options.getArgs("PRESSURE BASIS"));
     nrs->pOptions.setArgs("PRECONDITIONER",       options.getArgs("PRESSURE PRECONDITIONER"));
+    nrs->pOptions.setArgs("SEMFEM SOLVER", options.getArgs("PRESSURE SEMFEM SOLVER"));
+    nrs->pOptions.setArgs("SEMFEM SOLVER PRECISION", options.getArgs("PRESSURE SEMFEM SOLVER PRECISION"));
     nrs->pOptions.setArgs("MULTIGRID COARSENING", options.getArgs("PRESSURE MULTIGRID COARSENING"));
     nrs->pOptions.setArgs("MULTIGRID SMOOTHER",   options.getArgs("PRESSURE MULTIGRID SMOOTHER"));
     nrs->pOptions.setArgs("MULTIGRID DOWNWARD SMOOTHER",
@@ -790,7 +807,6 @@ void nrsSetup(MPI_Comm comm, setupAide &options, nrs_t *nrs)
     nrs->pOptions.setArgs("RESIDUAL PROJECTION START",
                           options.getArgs("PRESSURE RESIDUAL PROJECTION START"));
     nrs->pOptions.setArgs("MULTIGRID VARIABLE COEFFICIENT", "FALSE");
-    nrs->pOptions.setArgs("FIXED ITERATION COUNT", options.getArgs("PRESSURE FIXED ITERATION COUNT"));
     nrs->pOptions.setArgs("MAXIMUM ITERATIONS", options.getArgs("PRESSURE MAXIMUM ITERATIONS"));
 
     nrs->pSolver = new elliptic_t();
@@ -901,7 +917,7 @@ cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties& kernelInfoBC)
 
   cds->mesh[0]     = nrs->_mesh;
   mesh_t* mesh     = cds->mesh[0];
-  cds->meshV       = (mesh_t*) nrs->_mesh->fluid;
+  cds->meshV       = nrs->_mesh->fluid;
   cds->elementType = nrs->elementType;
   cds->dim         = nrs->dim;
   cds->NVfields    = nrs->NVfields;
@@ -926,6 +942,7 @@ cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties& kernelInfoBC)
     cds->fieldOffset[s] = cds->fieldOffset[0];
     cds->fieldOffsetScan[s] = sum;
     sum += cds->fieldOffset[s];
+    cds->mesh[s] = cds->mesh[0];
   }
   cds->fieldOffsetSum = sum;
 
@@ -962,6 +979,9 @@ cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties& kernelInfoBC)
   cds->sdt = nrs->sdt;
 
   cds->prop = (dfloat*) calloc(2 * cds->fieldOffsetSum,sizeof(dfloat));
+
+
+
   for(int is = 0; is < cds->NSfields; is++) {
     std::stringstream ss;
     ss << std::setfill('0') << std::setw(2) << is;
@@ -1020,6 +1040,12 @@ cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties& kernelInfoBC)
  
     cds->options[is] = options;
 
+    cds->options[is].setArgs("RAMP CONSTANT", options.getArgs("SCALAR" + sid + " RAMP CONSTANT"));
+    cds->options[is].setArgs("AVM C0", options.getArgs("SCALAR" + sid + " AVM C0"));
+    cds->options[is].setArgs("FILTER STABILIZATION", options.getArgs("SCALAR" + sid + " FILTER STABILIZATION"));
+    cds->options[is].setArgs("VISMAX COEFF", options.getArgs("SCALAR" + sid + " VISMAX COEFF"));
+    cds->options[is].setArgs("HPFRT STRENGTH", options.getArgs("SCALAR" + sid + " HPFRT STRENGTH"));
+    cds->options[is].setArgs("HPFRT MODES", options.getArgs("SCALAR" + sid + " HPFRT MODES"));
     cds->options[is].setArgs("KRYLOV SOLVER", options.getArgs("SCALAR" + sid + " KRYLOV SOLVER"));
     cds->options[is].setArgs("PGMRES RESTART", options.getArgs("SCALAR" + sid + " PGMRES RESTART"));
     cds->options[is].setArgs("DISCRETIZATION", options.getArgs("SCALAR DISCRETIZATION"));
@@ -1030,6 +1056,7 @@ cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties& kernelInfoBC)
     cds->options[is].setArgs("RESIDUAL PROJECTION",  options.getArgs("SCALAR" + sid + " RESIDUAL PROJECTION"));
     cds->options[is].setArgs("RESIDUAL PROJECTION VECTORS",  options.getArgs("SCALAR" + sid + " RESIDUAL PROJECTION VECTORS"));
     cds->options[is].setArgs("RESIDUAL PROJECTION START",  options.getArgs("SCALAR" + sid + " RESIDUAL PROJECTION START"));
+    cds->options[is].setArgs("MAXIMUM ITERATIONS", options.getArgs("SCALAR MAXIMUM ITERATIONS"));
 
     // setup boundary mapping
     dfloat largeNumber = 1 << 20;
@@ -1063,6 +1090,40 @@ cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties& kernelInfoBC)
     cds->o_EToB[is] = device.malloc(mesh->Nelements * mesh->Nfaces * sizeof(int), EToB);
     cds->o_mapB[is] = device.malloc(mesh->Nelements * mesh->Np * sizeof(int), mapB);
   }
+
+  bool scalarFilteringEnabled = false;
+  bool avmEnabled = false;
+  {
+    for(int is = 0; is < cds->NSfields; is++) {
+      if(!cds->options[is].compareArgs("FILTER STABILIZATION", "NONE")) scalarFilteringEnabled = true;
+      if(cds->options[is].compareArgs("FILTER STABILIZATION", "AVM")) avmEnabled = true;
+    }
+  }
+
+  if(scalarFilteringEnabled)
+  {
+    const dlong Nmodes = cds->mesh[0]->N + 1;
+    cds->o_filterMT = platform->device.malloc(cds->NSfields * Nmodes * Nmodes, sizeof(dfloat));
+    for(int is = 0; is < cds->NSfields; is++)
+    {
+      if(cds->options[is].compareArgs("FILTER STABILIZATION", "NONE")) continue;
+      int filterNc = -1;
+      cds->options[is].getArgs("HPFRT MODES", filterNc);
+      dfloat filterS;
+      cds->options[is].getArgs("HPFRT STRENGTH", filterS);
+      filterS = -1.0 * fabs(filterS);
+      cds->filterS[is] = filterS;
+
+      dfloat* A = filterSetup(cds->mesh[is], filterNc);
+
+      const dlong Nmodes = cds->mesh[is]->N + 1;
+      cds->o_filterMT.copyFrom(A, Nmodes * Nmodes * sizeof(dfloat), is * Nmodes * Nmodes * sizeof(dfloat));
+
+      free(A);
+    }
+  }
+
+  if(avmEnabled) avm::setup(cds);
 
   // build kernels
   occa::properties kernelInfo = *nrs->kernelInfo;
@@ -1130,7 +1191,7 @@ cds_t* cdsSetup(nrs_t* nrs, setupAide options, occa::properties& kernelInfoBC)
       cds->setEllipticCoeffKernel =
         device.buildKernel(fileName, kernelName, kernelInfo);
 
-      fileName = oklpath + "cds/filterRT" + suffix + ".okl";
+      fileName = oklpath + "cds/regularization/filterRT" + suffix + ".okl";
       kernelName = "filterRT" + suffix;
       cds->filterRTKernel =
         device.buildKernel(fileName, kernelName, kernelInfo);

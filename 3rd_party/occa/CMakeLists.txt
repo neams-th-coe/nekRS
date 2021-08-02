@@ -125,21 +125,16 @@ if(ENABLE_CUDA)
 
   if(CUDA_FOUND)
     set(OCCA_CUDA_ENABLED 1)
+    set(OCCA_CUDA_ENABLED 1 PARENT_SCOPE)
 
-    # Find the shared library rather than the static that find_package returns
-    find_library(CUDA_LIB
-      NAMES         cuda
-      PATHS         ${CUDA_TOOLKIT_ROOT_DIR}
-      PATH_SUFFIXES lib64 lib lib64/stubs lib/stubs
-      DOC           "CUDA driver lib location")
-
-    message("-- CUDA include dirs: ${CUDA_INCLUDE_DIRS}")
-    message("-- CUDA driver library: ${CUDA_LIB}")
+    set(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
+    find_package(CUDA)
 
     target_include_directories(libocca PRIVATE ${CUDA_INCLUDE_DIRS})
-    target_link_libraries(libocca PUBLIC ${CUDA_LIB})
+    target_link_libraries(libocca PUBLIC ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
   else (CUDA_FOUND)
     set(OCCA_CUDA_ENABLED 0)
+    set(OCCA_CUDA_ENABLED 0 PARENT_SCOPE)
   endif(CUDA_FOUND)
 endif(ENABLE_CUDA)
 #=======================================
@@ -169,14 +164,13 @@ if(ENABLE_OPENCL)
 
   if(OpenCL_FOUND)
     set(OCCA_OPENCL_ENABLED 1)
-
-    message("-- OpenCL include dirs: ${OpenCL_INCLUDE_DIRS}")
-    message("-- OpenCL libraries:    ${OpenCL_LIBRARIES}")
+    set(OCCA_OPENCL_ENABLED 1 PARENT_SCOPE)
 
     target_include_directories(libocca PRIVATE ${OpenCL_INCLUDE_DIRS})
     target_link_libraries(libocca PUBLIC ${OpenCL_LIBRARIES})
   else (OpenCL_FOUND)
     set(OCCA_OPENCL_ENABLED 0)
+    set(OCCA_OPENCL_ENABLED 0 PARENT_SCOPE)
   endif(OpenCL_FOUND)
 endif(ENABLE_OPENCL)
 #=======================================
@@ -187,17 +181,14 @@ if(ENABLE_HIP)
 
   if(HIP_FOUND)
     set(OCCA_HIP_ENABLED 1)
-
-    message("-- HIP version:      ${HIP_VERSION_STRING}")
-    message("-- HIP platform:     ${HIP_PLATFORM}")
-    message("-- HIP include dirs: ${HIP_INCLUDE_DIRS}")
-    message("-- HIP libraries:    ${HIP_LIBRARIES}")
+    set(OCCA_HIP_ENABLED 1 PARENT_SCOPE)
 
     target_compile_definitions(libocca PRIVATE -D${HIP_RUNTIME_DEFINE})
     target_include_directories(libocca PRIVATE ${HIP_INCLUDE_DIRS})
     target_link_libraries(libocca PUBLIC ${HIP_LIBRARIES})
   else (HIP_FOUND)
     set(OCCA_HIP_ENABLED 0)
+    set(OCCA_HIP_ENABLED 0 PARENT_SCOPE)
   endif(HIP_FOUND)
 endif(ENABLE_HIP)
 #=======================================
@@ -211,8 +202,10 @@ if(ENABLE_METAL AND APPLE)
 
   if(METAL_LIBRARY AND CORE_SERVICES AND APP_KIT)
     set(OCCA_METAL_ENABLED 1)
+    set(OCCA_METAL_ENABLED 1 PARENT_SCOPE)
   else()
     set(OCCA_METAL_ENABLED 0)
+    set(OCCA_METAL_ENABLED 0 PARENT_SCOPE)
   endif()
 endif()
 #=======================================
@@ -223,6 +216,7 @@ if(ENABLE_MPI)
 
   if(MPI_FOUND)
     set(OCCA_MPI_ENABLED 1)
+    set(OCCA_MPI_ENABLED 1 PARENT_SCOPE)
 
     message("-- MPI include dirs: ${MPI_CXX_INCLUDE_DIRS}")
     message("-- MPI libraries:    ${MPI_CXX_LIBRARIES}")
@@ -234,6 +228,7 @@ if(ENABLE_MPI)
     target_link_libraries(libocca PUBLIC ${MPI_CXX_LIBRARIES})
   else(MPI_FOUND)
     set(OCCA_MPI_ENABLED 0)
+    set(OCCA_MPI_ENABLED 0 PARENT_SCOPE)
   endif(MPI_FOUND)
 endif(ENABLE_MPI)
 #=======================================

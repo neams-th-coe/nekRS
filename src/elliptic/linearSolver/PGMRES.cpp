@@ -140,9 +140,25 @@ int pgmres(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x,
 
   occa::memory& o_w = elliptic->o_p;
   occa::memory& o_b = elliptic->o_rtmp;
+  
 
   occa::memory& o_z = elliptic->o_z;
   occa::memory& o_Ax = elliptic->o_Ap;
+
+  // r = b - Ax =>
+  // r + Ax = b
+  ellipticOperator(elliptic, o_x, o_Ax, dfloatString);
+  platform->linAlg->axpbyzMany(
+    mesh->Nlocal,
+    elliptic->Nfields,
+    elliptic->Ntotal,
+    1.0,
+    o_r,
+    1.0,
+    o_Ax,
+    o_b
+  );
+
   deviceVector_t& o_V = elliptic->gmresData->o_V;
   deviceVector_t& o_Z = elliptic->gmresData->o_Z;
 
@@ -169,8 +185,13 @@ int pgmres(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x,
   dfloat error = rdotr;
   const dfloat TOL = tol;
 
-  if (verbose&&(platform->comm.mpiRank==0))
-    printf("PGMRES: initial res norm %12.12f \n", rdotr);
+  if (verbose&&(platform->comm.mpiRank==0)) {
+    if(flexible)
+      printf("PFGMRES ");
+    else
+      printf("PGMRES ");
+    printf("%s: initial res norm %.15e WE NEED TO GET TO %e \n", elliptic->name.c_str(), rdotr, tol);
+  }
 
   int iter=0;
 
