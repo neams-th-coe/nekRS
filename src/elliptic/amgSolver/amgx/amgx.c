@@ -75,6 +75,8 @@ int AMGXsetup(const int nLocalRows, const int nnz,
             \"cycle\":\"V\",\
             \"presweeps\":1,\
             \"postsweeps\":1,\
+            \"coarsest_sweeps\":3,\
+            \"use_sum_stopping_criteria\":1,\
             \"coarse_solver\": \"NOSOLVER\"\
       }";
 
@@ -171,6 +173,10 @@ void AMGXfree()
   free(handle);
   handle = NULL;
 }
+int AMGXenabled()
+{
+  return 1;
+}
 
 #else
 int AMGXsetup(const int nLocalRows, const int nnz,
@@ -194,5 +200,10 @@ int AMGXsolve(void *x, void *rhs)
 
 void AMGXfree()
 {
+}
+
+int AMGXenabled()
+{
+  return 0;
 }
 #endif

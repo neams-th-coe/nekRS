@@ -162,7 +162,7 @@ void inverse(double invA[3][3], double A[3][3]) {
   }
 }
 
-occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, long long& bytesRemaining, long long& byteOffset, long long& bytesAllocated, bool& allocated);
+occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, size_t& bytesRemaining, size_t& byteOffset, size_t& bytesAllocated, bool& allocated);
 static occa::kernel computeStiffnessMatrixKernel;
 static occa::memory o_stiffness;
 static occa::memory o_x;
@@ -170,7 +170,7 @@ static occa::memory o_y;
 static occa::memory o_z;
 static bool constructOnHost = false;
 
-void build_kernel();
+void load();
 
 void construct_coo_graph();
 void fem_assembly_device();
@@ -236,22 +236,15 @@ SEMFEMData* ellipticBuildSEMFEM(const int N_, const int n_elem_,
 
   {
     comm_ext world;
-    world = (comm_ext)mpiComm; // MPI_COMM_WORLD;
+    world = (comm_ext)mpiComm;
     comm_init(&comm, world);
     gsh = gs_setup(gatherGlobalNodes, NuniqueBases, &comm, 0, gs_pairwise,
                    /* mode */ 0);
   }
 
-  constructOnHost = 
-    platform->device.mode() == std::string("OpenCL")
-    ||
-    platform->device.mode() == std::string("HIP")
-    ||
-    platform->device.mode() == std::string("Serial");
+  constructOnHost = !platform->device.deviceAtomic;
 
-  if(!constructOnHost) build_kernel();
-
-  if(platform->options.compareArgs("BUILD ONLY", "TRUE")) return NULL;
+  if(!constructOnHost) load();
 
   matrix_distribution();
 
@@ -701,9 +694,9 @@ void fem_assembly_device() {
     bool o_valsAlloc;
   };
   AllocationTracker allocations;
-  long long bytesRemaining = platform->o_mempool.bytesAllocated;
-  long long byteOffset = 0;
-  long long bytesAllocated = 0;
+  size_t bytesRemaining = platform->o_mempool.bytesAllocated;
+  size_t byteOffset = 0;
+  size_t bytesAllocated = 0;
   occa::memory o_mask = scratchOrAllocateMemory(
     n_xyze,
     sizeof(double),
@@ -857,21 +850,9 @@ void fem_assembly() {
   if(comm.id == 0) printf("done (%gs)\n", MPI_Wtime() - tStart);
 }
 
-void build_kernel(){
-  std::string install_dir;
-  install_dir.assign(getenv("NEKRS_INSTALL_DIR"));
-  std::string oklpath = install_dir + "/okl/";
-  occa::properties stiffnessKernelInfo = platform->kernelInfo;
-  std::string filename = oklpath + "elliptic/ellipticSEMFEMStiffness.okl";
-  stiffnessKernelInfo["defines/" "p_Nq"] = n_x;
-  stiffnessKernelInfo["defines/" "p_Np"] = n_x * n_x * n_x;
-  stiffnessKernelInfo["defines/" "p_rows_sorted"] = 1;
-  stiffnessKernelInfo["defines/" "p_cols_sorted"] = 0;
-
-  computeStiffnessMatrixKernel = platform->device.buildKernel(
-    filename,
-    "computeStiffnessMatrix",
-    stiffnessKernelInfo
+void load(){
+  computeStiffnessMatrixKernel = platform->kernels.get(
+    "computeStiffnessMatrix"
   );
 }
 void mesh_connectivity(int v_coord[8][3], int t_map[8][4]) {
@@ -935,7 +916,7 @@ void mesh_connectivity(int v_coord[8][3], int t_map[8][4]) {
   (t_map)[7][3] = 5;
 }
 
-occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, long long& bytesRemaining, long long& byteOffset, long long& bytesAllocated, bool& allocated)
+occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, size_t& bytesRemaining, size_t& byteOffset, size_t& bytesAllocated, bool& allocated)
 {
   occa::memory o_mem;
   if(nWords * sizeT < bytesRemaining){
