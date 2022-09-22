@@ -1,21 +1,38 @@
 [GENERAL] 
 #verbose = true
 polynomialOrder = 7
+dealiasing = false
+timeStepper = tombo1
+stopAt = numSteps
+numSteps = 0
 
 [PRESSURE]
-solver = pfgmres+20
+solver = pfgmres+nVector=30
 maxIterations = 200
-residualTol = 1e-8
+residualTol = 1e-8+relative
 
-#preconditioner = SEMFEM+AmgX+FP32 
+# p-MG multiplicative V-cycle, coarse grid solve
+preconditioner = multigrid
+smootherType = RAS+Chebyshev+degree=2 #+minEigenvalueBoundFactor=0.1+maxEigenvalueBoundFactor=1.1
+#coarseSolver = boomerAMG+device #AmgX
+#coarseGridDiscretization = FEM #+Galerkin
+#pMultigridCoarsening = 7,5,3,1
 
-smootherType = Chebyshev+RAS+2
-pMultigridCoarsening = 7,3,1
-#galerkinCoarseOperator = true
+# p-MG additive V-cycle, overlapping coarse grid solve
+#preconditioner = multigrid+additive+overlapCrsSolve
+#smootherType = ASM
 
-residualProj = false
+# p-MG, solve coarsest level using SEMFEM discretization
+#preconditioner = multigrid
+#coarseGridDiscretization = SEMFEM
 
-[VELOCITY]
+# SEMFEM
+#preconditioner = semfem
+
+initialGuess = previous
+
+[VELOCITY] # dummy
+preconditioner = none
 density = 1.0
 viscosity = 1.0
 
@@ -23,10 +40,15 @@ viscosity = 1.0
 #coarsenType = 8 
 #interpolationType = 6
 #smootherType = 16
+#coarseSmootherType = 9 
 #iterations = 1
 #strongThreshold = 0.25
 #nonGalerkinTol = 0.0
-#aggressiveCoarseningLevels = 1
+#aggressiveCoarseningLevels = 0
 
 #[AMGX]
 #configFile = "amgx.json"
+
+[CASEDATA]
+P_EPS = 0.3
+gsOverlap = 1

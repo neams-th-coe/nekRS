@@ -31,6 +31,7 @@ enum class SmootherType
 {
   CHEBYSHEV,
   SCHWARZ,
+  JACOBI,
 };
 enum class SecondarySmootherType
 {  
@@ -44,7 +45,6 @@ public:
 
   elliptic_t* elliptic;
   mesh_t* mesh;
-  dfloat lambda;
 
   int degree;
 
@@ -52,7 +52,7 @@ public:
   dfloat* R;
   occa::memory o_R;
   int NpF;
-  occa::memory o_invDegree;
+  occa::memory o_invDegreeFine;
 
   //smoothing params
   SmootherType stype;
@@ -80,9 +80,6 @@ public:
   occa::memory o_work2; // scratch space
   occa::memory o_wts; // weights to apply after operation
 
-  occa::memory o_xPfloat; // float-type o_x
-  occa::memory o_rhsPfloat; // float-type o_x
-
   // Eigenvalues
   occa::memory o_invL;
 
@@ -91,8 +88,8 @@ public:
 
   //local patch data
   occa::memory o_invAP, o_patchesIndex, o_invDegreeAP;
-  //ogs_t* extendedOgs = nullptr;
-  void* extendedOgs;
+  void* ogsExt;
+  void* ogsExtOverlap;
   void* ogs;
   void build(
     elliptic_t* pSolver);
@@ -100,20 +97,23 @@ public:
 
   setupAide options;
 
+  bool isCoarse;
+
   //build a single level
-  MGLevel(elliptic_t* ellipticBase, dfloat lambda_, int Nc,
-          setupAide options_, parAlmond::KrylovType ktype_, MPI_Comm comm_
+  MGLevel(elliptic_t* ellipticBase, int Nc,
+          setupAide options_, MPI_Comm comm_,
+          bool _isCoarse = false
           );
   //build a level and connect it to the previous one
   MGLevel(elliptic_t* ellipticBase, //finest level
           mesh_t** meshLevels,
           elliptic_t* ellipticFine,          //previous level
           elliptic_t* ellipticCoarse,          //current level
-          dfloat lambda_,
           int Nf, int Nc,
           setupAide options_,
-          parAlmond::KrylovType ktype_,
-          MPI_Comm comm_);
+          MPI_Comm comm_,
+          bool _isCoarse = false
+          );
 
   void Ax(dfloat* /*x*/, dfloat* /*Ax*/) {}
   void Ax(occa::memory o_x, occa::memory o_Ax);
@@ -135,6 +135,7 @@ public:
 
   void smoothChebyshev (occa::memory &o_r, occa::memory &o_x, bool xIsZero);
   void smoothSchwarz (occa::memory &o_r, occa::memory &o_x, bool xIsZero);
+  void smoothJacobi (occa::memory &o_r, occa::memory &o_x, bool xIsZero);
 
   void smootherJacobi    (occa::memory &o_r, occa::memory &o_Sr);
 

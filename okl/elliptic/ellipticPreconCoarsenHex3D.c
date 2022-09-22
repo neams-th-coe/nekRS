@@ -23,10 +23,10 @@
    SOFTWARE.
 
  */
-extern "C" void ellipticPreconCoarsenHex3D(const dlong& Nelements,
-                                            const dfloat* __restrict__  R,
-                                            const dfloat* __restrict__  qf,
-                                            dfloat* __restrict__  qc)
+extern "C" void FUNC(ellipticPreconCoarsenHex3D)(const dlong& Nelements,
+                                            const pfloat* __restrict__  R,
+                                            const pfloat* __restrict__  qf,
+                                            pfloat* __restrict__  qc)
 {
   dfloat s_q[p_NqFine][p_NqFine];
   dfloat s_Pq[p_NqCoarse][p_NqFine];
@@ -41,7 +41,10 @@ extern "C" void ellipticPreconCoarsenHex3D(const dlong& Nelements,
       s_RT[i][j] = r;
     }
   }
+
+#ifdef __NEKRS__OMP__
   #pragma omp parallel for private(s_Pq, r_q, s_q)
+#endif
   for(dlong e = 0; e < Nelements; ++e) {
 
     for(int j = 0; j < p_NqFine; ++j)

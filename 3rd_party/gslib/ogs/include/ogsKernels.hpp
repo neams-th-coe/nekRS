@@ -27,9 +27,12 @@ SOFTWARE.
 #ifndef OGS_KERNELS_HPP
 #define OGS_KERNELS_HPP 1
 
+#include <limits>
 #include "ogs.hpp"
 
 namespace ogs {
+
+  extern const int gatherNodesPerBlock;
 
   extern int Nrefs;
 
@@ -39,6 +42,11 @@ namespace ogs {
   extern void* haloBuf;
   extern occa::memory o_haloBuf;
   extern occa::memory h_haloBuf;
+
+  extern occa::kernel gatherScatterNewKernel_floatAdd;
+  extern occa::kernel gatherScatterNewKernel_doubleAdd;
+  extern occa::kernel gatherScatterNewKernel_doubleMin;
+  extern occa::kernel gatherScatterNewKernel_doubleMax;
 
   extern occa::kernel gatherScatterKernel_floatAdd;
   extern occa::kernel gatherScatterKernel_floatMul;
@@ -187,7 +195,7 @@ namespace ogs {
   extern occa::stream defaultStream;
   extern occa::stream dataStream;
 
-  void initKernels(MPI_Comm comm, occa::device device);
+  void initKernels(MPI_Comm comm, occa::device device, bool verbose = false);
 
   extern occa::properties kernelInfo;
 

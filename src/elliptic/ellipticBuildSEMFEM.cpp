@@ -2,20 +2,17 @@
  * Low-Order finite element preconditioner computed with HYPRE's AMG solver
 */
 
-#include <platform.hpp>
 #include <math.h>
 #include <limits>
-
-#include "_hypre_utilities.h"
-#include "HYPRE_parcsr_ls.h"
-#include "_hypre_parcsr_ls.h"
-#include "HYPRE.h"
-
-#include "gslib.h"
-#include "ellipticBuildSEMFEM.hpp"
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
+
+#include "nrssys.hpp"
+#include "platform.hpp"
+#include "hypreWrapper.hpp"
+#include "gslib.h"
+#include "ellipticBuildSEMFEM.hpp"
 
 namespace{
  void quadrature_rule(double q_r[4][3], double q_w[4]) {
@@ -162,7 +159,7 @@ void inverse(double invA[3][3], double A[3][3]) {
   }
 }
 
-occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, long long& bytesRemaining, long long& byteOffset, long long& bytesAllocated, bool& allocated);
+occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, size_t& bytesRemaining, size_t& byteOffset, size_t& bytesAllocated, bool& allocated);
 static occa::kernel computeStiffnessMatrixKernel;
 static occa::memory o_stiffness;
 static occa::memory o_x;
@@ -170,7 +167,7 @@ static occa::memory o_y;
 static occa::memory o_z;
 static bool constructOnHost = false;
 
-void build_kernel();
+void load();
 
 void construct_coo_graph();
 void fem_assembly_device();
@@ -190,17 +187,17 @@ static int num_loc_dofs;
 static long long *dof_map;
 static long long row_start;
 static long long row_end;
-static HYPRE_IJMatrix A_bc;
+static hypreWrapper::IJMatrix *A_bc;
 
 struct COOGraph
 {
-  long long nrows;
+  int nrows;
   long long nnz;
   long long * rows;
   long long * rowOffsets;
-  long long * ncols;
+  int * ncols;
   long long * cols;
-  double* vals;
+  float* vals;
 };
 
 static COOGraph coo_graph;
@@ -236,22 +233,15 @@ SEMFEMData* ellipticBuildSEMFEM(const int N_, const int n_elem_,
 
   {
     comm_ext world;
-    world = (comm_ext)mpiComm; // MPI_COMM_WORLD;
+    world = (comm_ext)mpiComm;
     comm_init(&comm, world);
     gsh = gs_setup(gatherGlobalNodes, NuniqueBases, &comm, 0, gs_pairwise,
                    /* mode */ 0);
   }
 
-  constructOnHost = 
-    platform->device.mode() == std::string("OpenCL")
-    ||
-    platform->device.mode() == std::string("HIP")
-    ||
-    platform->device.mode() == std::string("Serial");
+  constructOnHost = !platform->device.deviceAtomic;
 
-  if(!constructOnHost) build_kernel();
-
-  if(platform->options.compareArgs("BUILD ONLY", "TRUE")) return NULL;
+  if(!constructOnHost) load();
 
   matrix_distribution();
 
@@ -269,17 +259,17 @@ SEMFEMData* ellipticBuildSEMFEM(const int N_, const int n_elem_,
       comm_allreduce(&comm, gs_long_long, gs_add, &numRows64, 1, &numRowsGlobal64);
       if(numRowsGlobal64 > std::numeric_limits<int>::max()) { 
         if(comm.id == 0) printf("Number of global rows requires BigInt support!");
-        MPI_Abort(comm.c, EXIT_FAILURE);  
+        ABORT(EXIT_FAILURE);  
       }
     }
 
-    HYPRE_BigInt *ownedRows = (HYPRE_BigInt*) calloc(numRows, sizeof(HYPRE_BigInt));
+    hypreWrapper::BigInt *ownedRows = (hypreWrapper::BigInt*) calloc(numRows, sizeof(hypreWrapper::BigInt));
     int ctr = 0;
     for(long long row = row_start; row <= row_end; ++row)
       ownedRows[ctr++] = row;
   
-    HYPRE_Int *ncols = (HYPRE_Int*) calloc(numRows, sizeof(HYPRE_Int));
-    HYPRE_IJMatrixGetRowCounts(A_bc,
+    hypreWrapper::Int *ncols = (hypreWrapper::Int*) calloc(numRows, sizeof(hypreWrapper::Int));
+    hypreWrapper::IJMatrixGetRowCounts(&A_bc,
       numRows,
       ownedRows,
       ncols);
@@ -289,9 +279,9 @@ SEMFEMData* ellipticBuildSEMFEM(const int N_, const int n_elem_,
       nnz += ncols[i];
   
     // construct COO matrix from Hypre matrix
-    HYPRE_BigInt *hAj = (HYPRE_BigInt*) calloc(nnz, sizeof(HYPRE_BigInt));
-    HYPRE_Real   *hAv = (HYPRE_Real*) calloc(nnz, sizeof(HYPRE_Real));
-    HYPRE_IJMatrixGetValues(A_bc,
+    hypreWrapper::BigInt *hAj = (hypreWrapper::BigInt*) calloc(nnz, sizeof(hypreWrapper::BigInt));
+    hypreWrapper::Real   *hAv = (hypreWrapper::Real*) calloc(nnz, sizeof(hypreWrapper::Real));
+    hypreWrapper::IJMatrixGetValues(&A_bc,
       -numRows,
       ncols,
       ownedRows,
@@ -316,13 +306,41 @@ SEMFEMData* ellipticBuildSEMFEM(const int N_, const int n_elem_,
     free(hAv);
     free(ownedRows);
     free(ncols);
-    HYPRE_IJMatrixDestroy(A_bc);
+    hypreWrapper::IJMatrixDestroy(&A_bc);
+
+    double dropTol = 0.0;
+    platform->options.getArgs("AMG DROP TOLERANCE", dropTol);
+
+    int nnzTol = 0;
+    for(int n = 0; n < nnz; ++n){
+      if(std::abs(Av[n]) > dropTol){
+        nnzTol++;
+      }
+    }
+
+    long long *AiTol = (long long*) calloc(nnzTol, sizeof(long long));
+    long long *AjTol = (long long*) calloc(nnzTol, sizeof(long long));
+    double    *AvTol = (double*) calloc(nnzTol, sizeof(double));
+
+    int idx = 0;
+    for(int n = 0; n < nnz; ++n){
+      if(std::abs(Av[n]) > dropTol){
+        AiTol[idx] = Ai[n];
+        AjTol[idx] = Aj[n];
+        AvTol[idx] = Av[n];
+        idx++;
+      }
+    }
+
+    free(Ai);
+    free(Aj);
+    free(Av);
 
     data = (SEMFEMData*) malloc(sizeof(SEMFEMData));
-    data->Ai = Ai;
-    data->Aj = Aj;
-    data->Av = Av;
-    data->nnz = nnz;
+    data->Ai = AiTol;
+    data->Aj = AjTol;
+    data->Av = AvTol;
+    data->nnz = nnzTol;
     data->rowStart = row_start;
     data->rowEnd = row_end;
     data->dofMap = dof_map;
@@ -503,10 +521,10 @@ void construct_coo_graph() {
       }
     }
   }
-  const long long nrows = graph.size();
+  const int nrows = graph.size();
   long long * rows = (long long*) malloc(nrows * sizeof(long long));
   long long * rowOffsets = (long long*) malloc((nrows+1) * sizeof(long long));
-  long long * ncols = (long long*) malloc(nrows * sizeof(long long));
+  int * ncols = (int*) malloc(nrows * sizeof(int));
   long long nnz = 0;
   long long ctr = 0;
 
@@ -515,14 +533,14 @@ void construct_coo_graph() {
     nnz += row_and_colset.second.size();
   }
   long long * cols = (long long*) malloc(nnz * sizeof(long long));
-  double* vals = (double*) calloc(nnz,sizeof(double));
+  float* vals = (float*) calloc(nnz,sizeof(float));
   std::sort(rows, rows + nrows);
   long long entryCtr = 0;
   rowOffsets[0] = 0;
-  for(long long localrow = 0; localrow < nrows; ++localrow){
+  for(auto localrow = 0; localrow < nrows; ++localrow){
     const long long row = rows[localrow];
     const auto& colset = graph[row];
-    const int size = colset.size();
+    const auto size = colset.size();
     ncols[localrow] = size;
     rowOffsets[localrow+1] = rowOffsets[localrow] + size;
     for(auto&& col : colset){
@@ -541,13 +559,13 @@ void construct_coo_graph() {
 
 void fem_assembly_host() {
 
-  const long long nrows = coo_graph.nrows;
+  const int nrows = coo_graph.nrows;
   long long * rows = coo_graph.rows;
   long long * rowOffsets = coo_graph.rowOffsets;
-  long long * ncols = coo_graph.ncols;
+  int * ncols = coo_graph.ncols;
   long long nnz = coo_graph.nnz;
   long long * cols = coo_graph.cols;
-  double* vals = coo_graph.vals;
+  float* vals = coo_graph.vals;
 
   double q_r[4][3];
   double q_w[4];
@@ -666,11 +684,11 @@ void fem_assembly_host() {
   }
 
 
-  int err = HYPRE_IJMatrixAddToValues(A_bc, nrows, ncols, rows, cols, vals);
+  int err = hypreWrapper::IJMatrixAddToValues(&A_bc, nrows, ncols, rows, cols, vals);
   if (err != 0) {
     if (comm.id == 0)
-      printf("err!\n");
-    exit(EXIT_FAILURE);
+      printf("hypreWrapper::IJMatrixAddToValues failed!\n");
+    ABORT(EXIT_FAILURE);
   }
 
   free(rows);
@@ -684,13 +702,13 @@ void fem_assembly_host() {
 }
 void fem_assembly_device() {
 
-  const long long nrows = coo_graph.nrows;
+  const int nrows = coo_graph.nrows;
   long long * rows = coo_graph.rows;
   long long * rowOffsets = coo_graph.rowOffsets;
-  long long * ncols = coo_graph.ncols;
+  int * ncols = coo_graph.ncols;
   long long nnz = coo_graph.nnz;
   long long * cols = coo_graph.cols;
-  double* vals = coo_graph.vals;
+  float* vals = coo_graph.vals;
 
   struct AllocationTracker{
     bool o_maskAlloc;
@@ -701,9 +719,9 @@ void fem_assembly_device() {
     bool o_valsAlloc;
   };
   AllocationTracker allocations;
-  long long bytesRemaining = platform->o_mempool.bytesAllocated;
-  long long byteOffset = 0;
-  long long bytesAllocated = 0;
+  size_t bytesRemaining = platform->o_mempool.bytesAllocated;
+  size_t byteOffset = 0;
+  size_t bytesAllocated = 0;
   occa::memory o_mask = scratchOrAllocateMemory(
     n_xyze,
     sizeof(double),
@@ -751,7 +769,7 @@ void fem_assembly_device() {
   );
   occa::memory o_vals = scratchOrAllocateMemory(
     nnz,
-    sizeof(double),
+    sizeof(float),
     vals,
     bytesRemaining,
     byteOffset,
@@ -772,7 +790,7 @@ void fem_assembly_device() {
     o_cols,
     o_vals
   );
-  o_vals.copyTo(vals, nnz * sizeof(double));
+  o_vals.copyTo(vals, nnz * sizeof(float));
 
   if(allocations.o_maskAlloc) o_mask.free();
   if(allocations.o_glo_numAlloc) o_glo_num.free();
@@ -781,11 +799,11 @@ void fem_assembly_device() {
   if(allocations.o_colsAlloc) o_cols.free();
   if(allocations.o_valsAlloc) o_vals.free();
 
-  int err = HYPRE_IJMatrixAddToValues(A_bc, nrows, ncols, rows, cols, vals);
+  int err = hypreWrapper::IJMatrixAddToValues(&A_bc, nrows, ncols, rows, cols, vals);
   if (err != 0) {
     if (comm.id == 0)
-      printf("err!\n");
-    exit(EXIT_FAILURE);
+      printf("hypreWrapper::IJMatrixAddToValues failed!\n");
+    ABORT(EXIT_FAILURE);
   }
 
   free(rows);
@@ -832,9 +850,9 @@ void fem_assembly() {
   }
 
   /* Assemble FE matrices with boundary conditions applied */
-  HYPRE_IJMatrixCreate(comm.c, row_start, row_end, row_start, row_end, &A_bc);
-  HYPRE_IJMatrixSetObjectType(A_bc, HYPRE_PARCSR);
-  HYPRE_IJMatrixInitialize(A_bc);
+  hypreWrapper::IJMatrixCreate(comm.c, row_start, row_end, row_start, row_end, &A_bc);
+  hypreWrapper::IJMatrixSetObjectType(&A_bc);
+  hypreWrapper::IJMatrixInitialize(&A_bc);
 
   construct_coo_graph();
 
@@ -848,7 +866,7 @@ void fem_assembly() {
   }
 
   {
-    HYPRE_IJMatrixAssemble(A_bc);
+    hypreWrapper::IJMatrixAssemble(&A_bc);
   }
 
   free(glo_num);
@@ -857,21 +875,9 @@ void fem_assembly() {
   if(comm.id == 0) printf("done (%gs)\n", MPI_Wtime() - tStart);
 }
 
-void build_kernel(){
-  std::string install_dir;
-  install_dir.assign(getenv("NEKRS_INSTALL_DIR"));
-  std::string oklpath = install_dir + "/okl/";
-  occa::properties stiffnessKernelInfo = platform->kernelInfo;
-  std::string filename = oklpath + "elliptic/ellipticSEMFEMStiffness.okl";
-  stiffnessKernelInfo["defines/" "p_Nq"] = n_x;
-  stiffnessKernelInfo["defines/" "p_Np"] = n_x * n_x * n_x;
-  stiffnessKernelInfo["defines/" "p_rows_sorted"] = 1;
-  stiffnessKernelInfo["defines/" "p_cols_sorted"] = 0;
-
-  computeStiffnessMatrixKernel = platform->device.buildKernel(
-    filename,
-    "computeStiffnessMatrix",
-    stiffnessKernelInfo
+void load(){
+  computeStiffnessMatrixKernel = platform->kernels.get(
+    "computeStiffnessMatrix"
   );
 }
 void mesh_connectivity(int v_coord[8][3], int t_map[8][4]) {
@@ -935,7 +941,7 @@ void mesh_connectivity(int v_coord[8][3], int t_map[8][4]) {
   (t_map)[7][3] = 5;
 }
 
-occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, long long& bytesRemaining, long long& byteOffset, long long& bytesAllocated, bool& allocated)
+occa::memory scratchOrAllocateMemory(int nWords, int sizeT, void* src, size_t& bytesRemaining, size_t& byteOffset, size_t& bytesAllocated, bool& allocated)
 {
   occa::memory o_mem;
   if(nWords * sizeT < bytesRemaining){

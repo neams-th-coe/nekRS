@@ -45,13 +45,11 @@ int parallelCompareRowColumn(const void* a, const void* b)
 void ellipticBuildContinuousHex3D (elliptic_t* elliptic,
                                    nonZero_t** A,
                                    dlong* nnz,
-                                   ogs_t** ogs,
                                    hlong* globalStarts);
 
 void ellipticBuildContinuous(elliptic_t* elliptic,
                              nonZero_t** A,
                              dlong* nnz,
-                             ogs_t** ogs,
                              hlong* globalStarts)
 {
   mesh_t *mesh = elliptic->mesh;
@@ -62,7 +60,7 @@ void ellipticBuildContinuous(elliptic_t* elliptic,
 
   switch(elliptic->elementType) {
   case HEXAHEDRA:
-    ellipticBuildContinuousHex3D(elliptic, A, nnz, ogs, globalStarts);
+    ellipticBuildContinuousHex3D(elliptic, A, nnz, globalStarts);
     break;
   }
 
@@ -73,14 +71,14 @@ void ellipticBuildContinuous(elliptic_t* elliptic,
 void ellipticBuildContinuousHex3D(elliptic_t* elliptic,
                                   nonZero_t** A,
                                   dlong* nnz,
-                                  ogs_t** ogs,
                                   hlong* globalStarts)
 {
   
   mesh_t* mesh = elliptic->mesh;
-  setupAide options = elliptic->options;
-  // currently constant coefficient case only
-  const dfloat lambda = elliptic->lambda[0];
+  setupAide& options = elliptic->options;
+
+  // Poisson only
+  const dfloat lambda = 0.0;
 
   int rank = platform->comm.mpiRank;
 
@@ -124,7 +122,15 @@ void ellipticBuildContinuousHex3D(elliptic_t* elliptic,
   int* ArecvOffsets = (int*) calloc(platform->comm.mpiCommSize + 1, sizeof(int));
 
   int* mask = (int*) calloc(mesh->Np * mesh->Nelements,sizeof(int));
-  for (dlong n = 0; n < elliptic->Nmasked; n++) mask[elliptic->maskIds[n]] = 1;
+  if(elliptic->Nmasked > 0){
+    dlong* maskIds = (dlong*) calloc(elliptic->Nmasked, sizeof(dlong));
+    elliptic->o_maskIds.copyTo(maskIds, elliptic->Nmasked * sizeof(dlong));
+    for (dlong i = 0; i < elliptic->Nmasked; i++) mask[maskIds[i]] = 1.;
+    free(maskIds);
+  }
+
+  double dropTol = 0.0;
+  platform->options.getArgs("AMG DROP TOLERANCE", dropTol);
 
   dlong cnt = 0;
   for (dlong e = 0; e < mesh->Nelements; e++)
@@ -207,8 +213,7 @@ void ellipticBuildContinuousHex3D(elliptic_t* elliptic,
                 }
 
                 // pack non-zero
-                dfloat nonZeroThreshold = 1e-7;
-                if (fabs(val) >= nonZeroThreshold) {
+                if (fabs(val) > dropTol) {
                   sendNonZeros[cnt].val = val;
                   sendNonZeros[cnt].row = globalNumbering[e * mesh->Np + idn];
                   sendNonZeros[cnt].col = globalNumbering[e * mesh->Np + idm];

@@ -28,12 +28,14 @@
 #include "timer.hpp"
 #include "linAlg.hpp"
 
+//#define DEBUG
+
 int pcg(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x,
         const dfloat tol, const int MAXIT, dfloat &rdotr)
 {
   
   mesh_t* mesh = elliptic->mesh;
-  setupAide options = elliptic->options;
+  setupAide& options = elliptic->options;
 
   const int flexible = options.compareArgs("KRYLOV SOLVER", "FLEXIBLE");
   const int verbose = options.compareArgs("VERBOSE", "TRUE");
@@ -44,7 +46,7 @@ int pcg(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x,
 
   /*aux variables */
   occa::memory &o_p  = elliptic->o_p;
-  occa::memory &o_z  = elliptic->o_z;
+  occa::memory &o_z = (!options.compareArgs("PRECONDITIONER", "NONE")) ? elliptic->o_z : o_r;
   occa::memory &o_Ap = elliptic->o_Ap;
   occa::memory &o_weight = elliptic->o_invDegree;
   platform->linAlg->fill(elliptic->Nfields * elliptic->Ntotal, 0.0, o_p);
@@ -60,19 +62,25 @@ int pcg(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x,
   int iter = 0;
   do {
     iter++;
-    ellipticPreconditioner(elliptic, o_r, o_z);
-
     const dfloat rdotz2 = rdotz1;
-    rdotz1 = platform->linAlg->weightedInnerProdMany(
-      mesh->Nlocal,
-      elliptic->Nfields,
-      elliptic->Ntotal,
-      o_weight,
-      o_r,
-      o_z,
-      platform->comm.mpiComm);
+    if(!options.compareArgs("PRECONDITIONER", "NONE")) {
+      ellipticPreconditioner(elliptic, o_r, o_z);
 
-    //printf("norm rdotz1: %.15e\n", rdotz1);
+      rdotz1 = platform->linAlg->weightedInnerProdMany(
+        mesh->Nlocal,
+        elliptic->Nfields,
+        elliptic->Ntotal,
+        o_weight,
+        o_r,
+        o_z,
+        platform->comm.mpiComm);
+    } else {
+      rdotz1 = rdotr; 
+    }
+
+#ifdef DEBUG
+    printf("norm rdotz1: %.15e\n", rdotz1);
+#endif
 
     dfloat beta = 0;
     if(iter > 1) {
@@ -87,9 +95,16 @@ int pcg(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x,
           o_Ap,
           platform->comm.mpiComm);
         beta = -alpha * zdotAp/rdotz2;
-        //printf("norm zdotAp: %.15e\n", zdotAp);
+#ifdef DEBUG
+        printf("norm zdotAp: %.15e\n", zdotAp);
+#endif
       }
     }
+
+#ifdef DEBUG
+        printf("beta: %.15e\n", beta);
+#endif
+
 
     platform->linAlg->axpbyMany(
       mesh->Nlocal,
@@ -109,15 +124,25 @@ int pcg(elliptic_t* elliptic, occa::memory &o_r, occa::memory &o_x,
       o_p,
       o_Ap,
       platform->comm.mpiComm);
-    alpha = rdotz1 / pAp;
+    alpha = rdotz1 / (pAp + 1e-300);
 
-    //printf("norm pAp: %.15e\n", pAp);
+#ifdef DEBUG
+    printf("alpha: %.15e\n", alpha);
+    printf("norm pAp: %.15e\n", pAp);
+#endif
 
     //  x <= x + alpha*p
     //  r <= r - alpha*A*p
     //  dot(r,r)
     rdotr = sqrt(ellipticUpdatePCG(elliptic, o_p, o_Ap, alpha, o_x, o_r) * elliptic->resNormFactor);
-      
+#ifdef DEBUG
+    printf("rdotr: %.15e\n", rdotr);
+#endif
+    if(std::isnan(rdotr)) {
+      if(platform->comm.mpiRank == 0) printf("Detected invalid resiual norm while running linear solver!\n");
+      ABORT(1);
+    }
+
     if (verbose && (platform->comm.mpiRank == 0))
       printf("it %d r norm %.15e\n", iter, rdotr);
   }

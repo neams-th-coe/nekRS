@@ -44,18 +44,14 @@ static int parallelCompareRowColumn(const void* a, const void* b)
 
 void ellipticBuildContinuousGalerkinHex3D (elliptic_t* elliptic,
                                            elliptic_t* ellipticFine,
-                                           dfloat lambda,
                                            nonZero_t** A,
                                            dlong* nnz,
-                                           ogs_t** ogs,
                                            hlong* globalStarts);
 
 void ellipticBuildContinuousGalerkin(elliptic_t* elliptic,
                                      elliptic_t* ellipticFine,
-                                     dfloat lambda,
                                      nonZero_t** A,
                                      dlong* nnz,
-                                     ogs_t** ogs,
                                      hlong* globalStarts)
 {
   if(elliptic->mesh->Nq != 2) {
@@ -73,7 +69,7 @@ void ellipticBuildContinuousGalerkin(elliptic_t* elliptic,
     break;
   case HEXAHEDRA:
     ellipticBuildContinuousGalerkinHex3D(elliptic,ellipticFine,
-                                         lambda,A,nnz,ogs,globalStarts);
+                                         A,nnz,globalStarts);
     break;
   default:
     break;
@@ -82,7 +78,6 @@ void ellipticBuildContinuousGalerkin(elliptic_t* elliptic,
 
 void ellipticGenerateCoarseBasisHex3D(dfloat* b,int j_,elliptic_t* elliptic)
 {
-  // b = lx1**dim
   mesh_t* mesh = elliptic->mesh;
   dfloat* z = mesh->gllz;
 
@@ -107,13 +102,13 @@ void ellipticGenerateCoarseBasisHex3D(dfloat* b,int j_,elliptic_t* elliptic)
   if(jj == 3 || jj == 4 || jj == 7 || jj == 8) memcpy(zs,z1,mesh->Nq * sizeof(dfloat));
   if(jj > 4) memcpy(zt,z1,mesh->Nq * sizeof(dfloat));
 
-  int dim = mesh->dim;
   for(int k = 0; k < mesh->Nq; k++)
     for(int j = 0; j < mesh->Nq; j++)
       for(int i = 0; i < mesh->Nq; i++) {
         int n = i + mesh->Nq * j + mesh->Nq * mesh->Nq * k + j_ * mesh->Np;
         b[n] = zr[i] * zs[j] * zt[k];
       }
+
   free(zr);
   free(zs);
   free(zt);
@@ -123,15 +118,13 @@ void ellipticGenerateCoarseBasisHex3D(dfloat* b,int j_,elliptic_t* elliptic)
 
 void ellipticBuildContinuousGalerkinHex3D(elliptic_t* elliptic,
                                           elliptic_t* ellipticFine,
-                                          dfloat lambda,
                                           nonZero_t** A,
                                           dlong* nnz,
-                                          ogs_t** ogs,
                                           hlong* globalStarts)
 {
   mesh_t* mesh = elliptic->mesh;
   
-  setupAide options = elliptic->options;
+  setupAide& options = elliptic->options;
 
   MPI_Barrier(platform->comm.mpiComm);
   const double tStart = MPI_Wtime();
@@ -139,8 +132,6 @@ void ellipticBuildContinuousGalerkinHex3D(elliptic_t* elliptic,
   fflush(stdout);
 
   int rank = platform->comm.mpiRank;
-
-  //use the masked gs handle to define a global ordering
 
   // number of degrees of freedom on this rank (after gathering)
   hlong Ngather = elliptic->ogs->Ngather;
@@ -180,7 +171,12 @@ void ellipticBuildContinuousGalerkinHex3D(elliptic_t* elliptic,
   int* ArecvOffsets = (int*) calloc(platform->comm.mpiCommSize + 1, sizeof(int));
 
   int* mask = (int*) calloc(mesh->Np * mesh->Nelements,sizeof(int));
-  for (dlong n = 0; n < elliptic->Nmasked; n++) mask[elliptic->maskIds[n]] = 1;
+  if(elliptic->Nmasked > 0){
+    dlong* maskIds = (dlong*) calloc(elliptic->Nmasked, sizeof(dlong));
+    elliptic->o_maskIds.copyTo(maskIds, elliptic->Nmasked * sizeof(dlong));
+    for (dlong i = 0; i < elliptic->Nmasked; i++) mask[maskIds[i]] = 1.;
+    free(maskIds);
+  }
 
   mesh_t* meshf = ellipticFine->mesh;
 
@@ -189,22 +185,16 @@ void ellipticBuildContinuousGalerkinHex3D(elliptic_t* elliptic,
   q = (dfloat*)calloc(meshf->Np * mesh->Nelements,sizeof(dfloat));
   Aq = (dfloat*)calloc(meshf->Np * mesh->Nelements,sizeof(dfloat));
 
-  occa::memory o_q = platform->device.malloc(meshf->Np *
-                                         mesh->Nelements * sizeof(dfloat), q);
-  occa::memory o_Aq = platform->device.malloc(meshf->Np *
-                                          mesh->Nelements * sizeof(dfloat),Aq);
+  occa::memory o_q = platform->device.malloc(meshf->Nlocal * sizeof(dfloat), q);
+  occa::memory o_qPfloat = platform->device.malloc(meshf->Nlocal * sizeof(pfloat));
+  occa::memory o_Aq = platform->device.malloc(meshf->Nlocal * sizeof(dfloat),Aq);
+  occa::memory o_AqPfloat = platform->device.malloc(meshf->Nlocal * sizeof(pfloat));
 
   for(int jj = 0; jj < mesh->Np; jj++)
     ellipticGenerateCoarseBasisHex3D(b,jj,ellipticFine);
-
-  int enableGatherScatters = 1;
-  int enableReductions = 1;
-
-  setupAide &optionsFine = ellipticFine->options;
-  optionsFine.getArgs("DEBUG ENABLE REDUCTIONS",
-                      enableReductions);
-  optionsFine.getArgs("DEBUG ENABLE OGS",
-                      enableGatherScatters);
+  
+  double dropTol = 0.0;
+  platform->options.getArgs("AMG DROP TOLERANCE", dropTol);
 
   dlong cnt = 0;
   for (int nz = 0; nz < mesh->Nq; nz++)
@@ -217,9 +207,9 @@ void ellipticBuildContinuousGalerkinHex3D(elliptic_t* elliptic,
                  meshf->Np * sizeof(dfloat));
 
         o_q.copyFrom(q);
-        ellipticFine->AxKernel(mesh->Nelements,meshf->o_ggeo,
-                               meshf->o_D,meshf->o_DT,
-                               lambda,o_q,o_Aq);
+        platform->copyDfloatToPfloatKernel(meshf->Nlocal, o_q, o_qPfloat);
+        ellipticAx(ellipticFine, meshf->Nelements, meshf->o_elementList, o_qPfloat, o_AqPfloat, pfloatString);
+        platform->copyPfloatToDfloatKernel(meshf->Nlocal, o_AqPfloat, o_Aq);
         o_Aq.copyTo(Aq);
 
         for(dlong e = 0; e < mesh->Nelements; e++)
@@ -232,13 +222,12 @@ void ellipticBuildContinuousGalerkinHex3D(elliptic_t* elliptic,
                 if (mask[e * mesh->Np + idn])
                   continue; //skip masked nodes
 
-                dfloat val = 0.f;
+                dfloat val = 0;
                 for(int mmm = 0; mmm < meshf->Np; mmm++)
                   val += Aq[e * meshf->Np + mmm] * b[mmm + idm * meshf->Np];
 
                 // pack non-zero
-                dfloat nonZeroThreshold = 1e-7;
-                if (fabs(val) >= nonZeroThreshold) {
+                if (fabs(val) > dropTol) {
                   sendNonZeros[cnt].val = val;
                   sendNonZeros[cnt].row = globalNumbering[e * mesh->Np + idm];
                   sendNonZeros[cnt].col = globalNumbering[e * mesh->Np + idn];
@@ -252,7 +241,9 @@ void ellipticBuildContinuousGalerkinHex3D(elliptic_t* elliptic,
   free(q);
   free(Aq);
   o_q.free();
+  o_qPfloat.free();
   o_Aq.free();
+  o_AqPfloat.free();
 
   // Make the MPI_NONZERO_T data type
   MPI_Datatype MPI_NONZERO_T;

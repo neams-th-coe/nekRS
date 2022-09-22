@@ -13,7 +13,7 @@ namespace
 {
 struct tagData
 {
-  int count;
+  long long int count;
   double hostElapsed;
   double deviceElapsed;
   double startTime;
@@ -27,45 +27,88 @@ const int NEKRS_TIMER_INVALID_METRIC = -2;
 int ifSync_;
 inline int ifSync(){ return ifSync_; }
 
+int enable_sync_;
+
+int enabled;
+
 occa::device device_;
 MPI_Comm comm_;
+
+inline void sync()
+{
+  if(enable_sync_) MPI_Barrier(comm_);
 }
 
-timer_t::timer_t(MPI_Comm comm,occa::device device,int ifSync)
-{
-  init(comm, device, ifSync);
+double tElapsedTime = 0;
 }
-void timer_t::init(MPI_Comm comm,occa::device device,int ifSync)
+
+timer_t::timer_t(MPI_Comm comm,occa::device device,int ifSyncDefault, int enableSync)
+{
+ init(comm, device, ifSyncDefault, enableSync);
+
+}
+
+void timer_t::init(MPI_Comm comm,occa::device device,int ifSyncDefault, int enableSync)
 {
   device_ = device;
-  ifSync_ = ifSync;
+  ifSync_ = ifSyncDefault;
   comm_ = comm;
+  enable_sync_ = enableSync;
+  enabled = 1;
 }
 
-void timer_t::set(const std::string tag, double time)
+void timer_t::set(const std::string tag, double time, long long int count)
 {
   m_[tag].startTime = time;	
   auto it = m_.find(tag);
   if(it == m_.end()) {
-    printf("Error in set: Invalid tag name. %s:%u\n",__FILE__,__LINE__);
+    printf("Error in set: Invalid tag name %s\n",tag.c_str());
     MPI_Abort(comm_,1);
   }
 
   it->second.hostElapsed = time; 
   it->second.deviceElapsed = it->second.hostElapsed;
-  it->second.count++;
+  it->second.count = count;
+}
+
+void timer_t::enable()
+{
+  enabled = 1;
+}
+
+void timer_t::disable()
+{
+  enabled = 0;
 }
 
 void timer_t::reset()
 {
-  m_.clear();
+  for (auto& it : m_) {
+    it.second.startTime = 0; 
+    it.second.hostElapsed = 0;
+    it.second.deviceElapsed = 0;
+    it.second.count = 0;
+  }
   ogsResetTime();
+}
+
+void timer_t::enableSync()
+{
+  enable_sync_ = 1;
+}
+
+void timer_t::disableSync()
+{
+  enable_sync_ = 0;
 }
 
 void timer_t::reset(const std::string tag)
 {
   std::map<std::string,tagData>::iterator it = m_.find(tag);
-  if(it != m_.end()) m_.erase(it);
+  it->second.startTime = 0; 
+  it->second.hostElapsed = 0;
+  it->second.deviceElapsed = 0;
+  it->second.count = 0;
 }
 
 void timer_t::finalize()
@@ -75,23 +118,26 @@ void timer_t::finalize()
 
 void timer_t::deviceTic(const std::string tag,int ifSync)
 {
-  if(ifSync) MPI_Barrier(comm_);
+  if(!enabled) return;
+  if(ifSync) sync();
   m_[tag].startTag = device_.tagStream();
 }
 
 void timer_t::deviceTic(const std::string tag)
 {
-  if(ifSync()) MPI_Barrier(comm_);
+  if(!enabled) return;
+  if(ifSync()) sync();
   m_[tag].startTag = device_.tagStream();
 }
 
 void timer_t::deviceToc(const std::string tag)
 {
+  if(!enabled) return;
   occa::streamTag stopTag = device_.tagStream();
 
   std::map<std::string,tagData>::iterator it = m_.find(tag);
   if(it == m_.end()) {
-    printf("Error in deviceToc: Invalid tag name. %s:%u\n",__FILE__,__LINE__);
+    printf("Error in deviceToc: Invalid tag name %s\n",tag.c_str()); 
     MPI_Abort(comm_,1);
   }
 
@@ -101,23 +147,26 @@ void timer_t::deviceToc(const std::string tag)
 
 void timer_t::hostTic(const std::string tag,int ifSync)
 {
-  if(ifSync) MPI_Barrier(comm_);
+  if(!enabled) return;
+  if(ifSync) sync();
   m_[tag].startTime = MPI_Wtime();
 }
 
 void timer_t::hostTic(const std::string tag)
 {
-  if(ifSync()) MPI_Barrier(comm_);
+  if(!enabled) return;
+  if(ifSync()) sync();
   m_[tag].startTime = MPI_Wtime();
 }
 
 void timer_t::hostToc(const std::string tag)
 {
+  if(!enabled) return;
   double stopTime = MPI_Wtime();
 
   auto it = m_.find(tag);
   if(it == m_.end()) {
-    printf("Error in deviceToc: Invalid tag name. %s:%u\n",__FILE__,__LINE__);
+    printf("Error in deviceToc: Invalid tag name %s\n",tag.c_str());
     MPI_Abort(comm_,1);
   }
 
@@ -127,26 +176,29 @@ void timer_t::hostToc(const std::string tag)
 
 void timer_t::tic(const std::string tag,int ifSync)
 {
-  if(ifSync) MPI_Barrier(comm_);
+  if(!enabled) return;
+  if(ifSync) sync();
   m_[tag].startTime = MPI_Wtime();
   m_[tag].startTag = device_.tagStream();
 }
 
 void timer_t::tic(const std::string tag)
 {
-  if(ifSync()) MPI_Barrier(comm_);
+  if(!enabled) return;
+  if(ifSync()) sync();
   m_[tag].startTime = MPI_Wtime();
   m_[tag].startTag = device_.tagStream();
 }
 
 void timer_t::toc(const std::string tag)
 {
+  if(!enabled) return;
   auto stopTime = MPI_Wtime();
   auto stopTag = device_.tagStream();
 
   auto it = m_.find(tag);
   if(it == m_.end()) {
-    printf("Error in deviceToc: Invalid tag name. %s:%u\n",__FILE__,__LINE__);
+    printf("Error in deviceToc: Invalid tag name %s\n",tag.c_str()); 
     MPI_Abort(comm_,1);
   }
 
@@ -169,7 +221,7 @@ double timer_t::deviceElapsed(const std::string tag)
   return it->second.deviceElapsed;
 }
 
-int timer_t::count(const std::string tag)
+long long int timer_t::count(const std::string tag)
 {
   auto it = m_.find(tag);
   if(it == m_.end()) return NEKRS_TIMER_INVALID_KEY;
@@ -227,90 +279,163 @@ double timer_t::query(const std::string tag,const std::string metric)
   return NEKRS_TIMER_INVALID_METRIC;
 }
 
-void timer_t::printRunStat()
+std::string printPercentage(double num, double dom)
+{
+  char buf[4096];
+  double frac = num/dom;
+  snprintf(buf, sizeof(buf), "%4.1f", 100*frac);
+  return std::string(buf);
+}
+
+void timer_t::printStatEntry(std::string name, std::string tag, std::string type, double tNorm) 
+{
+  int rank;
+  MPI_Comm_rank(comm_, &rank);
+  const long long int nCalls = count(tag);
+  const double tTag = query(tag, type);
+  const bool child = (tNorm != tElapsedTime);
+  if(tTag > 0) {
+    if(rank == 0){
+      std::cout << name 
+                << tTag << "s"  
+                << "  " << printPercentage(tTag, tElapsedTime);
+      if(child) 
+      std::cout << "  " << printPercentage(tTag, tNorm);
+      else
+      std::cout << "      ";
+      std::cout << "  " << nCalls << "\n";
+    }
+  } 
+}
+
+void timer_t::printStatEntry(std::string name, double time, double tNorm) 
+{
+  int rank;
+  MPI_Comm_rank(comm_, &rank);
+  const bool child = (tNorm != tElapsedTime);
+  if(time > 0) {
+    if(rank == 0){
+      std::cout << name 
+                << time << "s" 
+                << "  " << printPercentage(time, tElapsedTime);
+      if(child) 
+      std::cout << "  " << printPercentage(time, tNorm);
+      else
+      std::cout << "      ";
+      std::cout << "\n";
+    } 
+  } 
+}
+
+void timer_t::printRunStat(int step)
 {
   int rank;
   MPI_Comm_rank(comm_, &rank);
 
-  double dEtime[20];
-  dEtime[0] = query("makef", "DEVICE:MAX");
-  dEtime[1] = query("velocitySolve", "DEVICE:MAX");
-  dEtime[17] = query("velocity proj pre", "DEVICE:MAX");
-  dEtime[17]+= query("velocity proj post", "DEVICE:MAX");
-  dEtime[2] = query("pressureSolve", "DEVICE:MAX");
-  dEtime[3] = query("makeq", "DEVICE:MAX");
-  dEtime[4] = query("scalarSolve", "DEVICE:MAX");
-  dEtime[5] = query("pressure preconditioner", "DEVICE:MAX");
-  dEtime[16] = query("pressure preconditioner smoother", "DEVICE:MAX");
-  dEtime[6] = query("pressure proj pre", "DEVICE:MAX");
-  dEtime[6]+= query("pressure proj post", "DEVICE:MAX");
+  set("velocity proj", 
+      query("velocity proj pre", "DEVICE:MAX") + query("velocity proj post", "DEVICE:MAX"),
+      count("velocity proj pre"));
 
-  dEtime[8] = query("dotp", "DEVICE:MAX");
+  set("pressure proj", 
+      query("pressure proj pre", "DEVICE:MAX") + query("pressure proj post", "DEVICE:MAX"),
+      count("pressure proj pre"));
 
-  dEtime[9] = query("solve", "DEVICE:MAX");
-  dEtime[10] = query("setup", "DEVICE:MAX");
-  dEtime[11] = query("checkpointing", "DEVICE:MAX");
+  set("scalar proj", 
+      query("scalar proj pre", "DEVICE:MAX") + query("scalar proj post", "DEVICE:MAX"),
+      count("scalar proj pre"));
 
-  dEtime[12] = query("udfExecuteStep", "DEVICE:MAX");
-  dEtime[13] = query("udfUEqnSource", "DEVICE:MAX");
-  dEtime[14] = query("udfSEqnSource", "DEVICE:MAX");
-  dEtime[15] = query("udfProperties", "DEVICE:MAX");
 
-  double hEtime[10];
-  hEtime[0] = query("BoomerAMGSolve", "HOST:MAX");
-  hEtime[1] = ogsTime(/* reportHostTime */ true);
-  MPI_Allreduce(MPI_IN_PLACE, &hEtime[1], 1, MPI_DOUBLE, MPI_MAX, comm_);
+  double gsTime = ogsTime(/* reportHostTime */ true);
+  MPI_Allreduce(MPI_IN_PLACE, &gsTime, 1, MPI_DOUBLE, MPI_MAX, comm_);
 
-  if (rank == 0) {
-    std::cout.setf ( std::ios::scientific );
+  tElapsedTime = query("elapsed", "DEVICE:MAX");
 
-    std::cout << "runtime statistics\n\n"
-  	      << "  setup                 " << dEtime[10]<< " s\n";
+  if (rank == 0)
+    std::cout << "\n>>> runtime statistics (step= " << step << "  totalElapsed= " << tElapsedTime << "s"
+              << "):\n";
 
-    if(dEtime[11] > 0)
-    std::cout << "  checkpointing         " << dEtime[11]<< " s\n";
+  std::cout.setf(std::ios::scientific);
+  int outPrecisionSave = std::cout.precision();
+  std::cout.precision(5);
 
-    if(dEtime[12] > 0)
-    std::cout << "  udfExecuteStep        " << dEtime[12] << " s\n";
+  if(rank == 0) std::cout <<   "name                    " << "time          " << "abs%  " << "rel%  " << "calls\n";
 
-    std::cout << "  total solve           " << dEtime[9] << " s\n"
-  	      << "    makef               " << dEtime[0] << " s\n";
-    if(dEtime[13] > 0)
-    std::cout << "      udfUEqnSource     " << dEtime[13] << " s\n";
-    std::cout << "    velocitySolve       " << dEtime[1] << " s\n";
-    if(dEtime[17] > 0)
-    std::cout << "      projection        " << dEtime[17] << " s\n";
+  const double tElapsedTimeSolve = query("elapsedStepSum", "DEVICE:MAX");
+  const double tSetup = query("setup", "DEVICE:MAX");
 
-    std::cout << "    pressureSolve       " << dEtime[2] << " s\n"
-              << "      preconditioner    " << dEtime[5] << " s\n";
-    if(dEtime[16] > 0)
-    std::cout << "        pMG smoother    " << dEtime[16] << " s\n";
-    if(hEtime[0] > 0)
-    std::cout << "        coarse grid     " << hEtime[0] << " s\n";
-    if(dEtime[6] > 0)
-    std::cout << "      projection        " << dEtime[6] << " s\n";
+  const double tMinSolveStep = query("minSolveStep", "DEVICE:MAX");
+  const double tMaxSolveStep = query("maxSolveStep", "DEVICE:MAX");
+  const double flops = platform->flopCounter->get(platform->comm.mpiComm);
+  bool printFlops = !platform->options.compareArgs("PRESSURE PRECONDITIONER", "SEMFEM");
 
-    if(dEtime[14] > 0)
-    std::cout << "    scalarSolve         " << dEtime[4] << " s\n"
-              << std::endl;
-    if(dEtime[4] > 0) {
-    std::cout << "    makeq               " << dEtime[3] << " s\n";
-     if(dEtime[14] > 0)
-    std::cout << "      udfSEqnSource     " << dEtime[14] << " s\n";
-    }
+  printStatEntry("  setup                 ", "setup", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("    loadKernels         ", "loadKernels", "HOST:MAX", tSetup);
 
-    if(dEtime[15] > 0)
-    std::cout << "    udfProperties       " << dEtime[15] << " s\n"
-              << std::endl;
-
-    if(hEtime[1] > 0)
-    std::cout << "    gsMPI               " << hEtime[1] << " s\n";
-    if(dEtime[8] > 0)
-    std::cout << "    dotp                " << dEtime[8] << " s\n";
-
-    std::cout << std::endl;
-
-    std::cout.unsetf ( std::ios::scientific );
+  printStatEntry("  solve                 ", tElapsedTimeSolve, tElapsedTime);
+  if(tElapsedTimeSolve > 0 && rank == 0) {
+  std::cout <<   "    min                 " << tMinSolveStep << "s\n";
+  std::cout <<   "    max                 " << tMaxSolveStep << "s\n";
+  if(printFlops)
+  std::cout <<   "    flops               " << flops << "\n";
   }
+  
+  printStatEntry("    checkpointing       ", "checkpointing", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("    udfExecuteStep      ", "udfExecuteStep", "DEVICE:MAX", tElapsedTime);
+
+  printStatEntry("    meshUpdate          ", "meshUpdate", "DEVICE:MAX", tElapsedTime);
+
+  const double tMakef = query("makef", "DEVICE:MAX");
+  printStatEntry("    makef               ", "makef", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("      udfUEqnSource     ", "udfUEqnSource", "DEVICE:MAX", tMakef);
+
+  const double tMakeq = query("makeq", "DEVICE:MAX");
+  printStatEntry("    makeq               ", "makeq", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("      udfSEqnSource     ", "udfSEqnSource", "DEVICE:MAX", tMakeq);
+
+  printStatEntry("    udfProperties       ", "udfProperties", "DEVICE:MAX", tElapsedTime);
+ 
+  const double tVelocity = query("velocitySolve", "DEVICE:MAX");
+  printStatEntry("    velocitySolve       ", "velocitySolve", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("      rhs               ", "velocity rhs", "DEVICE:MAX", tVelocity);
+  printStatEntry("      initial guess     ", "velocity proj", "DEVICE:MAX", tVelocity);
+
+  const double tPressure = query("pressureSolve", "DEVICE:MAX");
+  printStatEntry("    pressureSolve       ", "pressureSolve", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("      rhs               ", "pressure rhs", "DEVICE:MAX", tPressure);
+
+  const double tPressurePreco = query("pressure preconditioner", "DEVICE:MAX");
+  printStatEntry("      preconditioner    ", "pressure preconditioner", "DEVICE:MAX", tPressure);
+
+  for(int i=15; i>1; i--) {
+    const std::string tag = "pressure preconditioner smoother N=" + std::to_string(i);
+    if(m_.find(tag) == m_.end()) continue;
+    printStatEntry("        pMG smoother    ", tag, "DEVICE:MAX", tPressurePreco);
+  }
+
+  printStatEntry("        coarse grid     ", "coarseSolve", "DEVICE:MAX", tPressurePreco);
+  printStatEntry("      initial guess     ", "pressure proj", "DEVICE:MAX", tPressure);
+
+  const double tScalar = query("scalarSolve", "DEVICE:MAX");
+  printStatEntry("    scalarSolve         ", "scalarSolve", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("      rhs               ", "scalar rhs", "DEVICE:MAX", tScalar);
+  printStatEntry("      initial guess     ", "scalar proj", "DEVICE:MAX", tScalar);
+
+  const double tMesh = query("meshSolve", "DEVICE:MAX");
+  printStatEntry("    meshSolve           ", "meshSolve", "DEVICE:MAX", tElapsedTime);
+  printStatEntry("      initial guess     ", "mesh proj", "DEVICE:MAX", tMesh);
+
+  printStatEntry("    gsMPI               ", gsTime, tElapsedTime);
+
+  printStatEntry("    dotp                ", "dotp", "DEVICE:MAX", tElapsedTime);
+
+  printStatEntry("    dotp multi          ", "dotpMulti", "DEVICE:MAX", tElapsedTime);
+
+  if(rank == 0) std::cout << std::endl;
+
+  std::cout.unsetf(std::ios::scientific);
+  std::cout.precision(outPrecisionSave);
 }
+
 } // namespace
+
+

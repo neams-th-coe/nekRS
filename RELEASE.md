@@ -1,20 +1,122 @@
-# Release v21.1.0
+# Release v22.1
 
 ## What is new? 
 
-* Flexible GMRES for pressure 
-* Various bug fixes 
+* Single source udf+oudf (see ethier example) 
+* Support BoomerAMG on device
 
-## What you may have to change to be compatible 
+## Good to know
 
-## Known Bugs 
+* ... 
 
-* [201](https://github.com/Nek5000/nekRS/issues/201)
-* [199](https://github.com/Nek5000/nekRS/issues/199)
-* [166](https://github.com/Nek5000/nekRS/issues/166)
-* [2](https://github.com/Nek5000/nekRS/issues/2)
+## Breaking Changes
+* [nrsconfig] Optional build settings have to be passed as a command line arg e.g. `-DENABLE_AMGX=ON`
+* time step was added to `nekRS::outfld(..., int step, ...)`
+
+## Known Bugs / Restrictions
+
+* [par] Rename writeControl value `runTime` => `simulationTime`
+* [par] Remove multigrid qualifier `coarse`
+* [par] Remove SEMFEM solver specification from key `preconditioner`, use `semfemSolver` instead
+
+## Known Bugs / Restrictions
+
+* Mesh solver does not support CHT and unaligned sym/shl BCs
+* [729](https://github.com/Nek5000/Nek5000/issues/759)
+* [300](https://github.com/Nek5000/nekRS/issues/300)
+* [258](https://github.com/Nek5000/nekRS/issues/258)
 
 ## Thanks to our Contributors
+
+@pwang234
+
+We are grateful to all who added new features, filed issues or helped resolve them, 
+asked and answered questions, and were part of inspiring discussions.
+
+
+# Release v22.0
+
+## What is new? 
+
+* Multi-session (uncoupled) support
+* Support unaligned symmetry boundary condition
+* Support (unaligned) traction boundary condition
+* Better performance on AMD MI-GPUs
+* FLOP counters
+* Various bug fixes 
+
+## Good to know
+
+* OpenCL support is now disabled by default 
+
+## Breaking Changes
+
+* [udf] Rename `udfBuildKernel` => `oudfBuildKernel`
+* [par] Separate details of coarse grid discretization from coarse grid solver
+        e.g., `coarseSolver = SEMFEM+AmgX` is replaced by
+        `coarseSolver = AmgX` and `coarseGridDiscretization = SEMFEM`
+* [par] Remove `preconditioner=semg` and `preconditioner=semg_amg`
+* [udf] Rename plug-in name `avg`  => `tavg`
+* [udf] Rename `udf.converged` => `udf.timeStepConverged`
+* [nrsconfig] Rename env-var `AMGX_ENABLE` => `ENABLE_AMGX`
+
+## Known Bugs / Restrictions
+
+* Mesh solver does not support CHT and unaligned sym/shl BCs
+* [729](https://github.com/Nek5000/Nek5000/issues/759)
+* [300](https://github.com/Nek5000/nekRS/issues/300)
+* [258](https://github.com/Nek5000/nekRS/issues/258)
+
+## Thanks to our Contributors
+
+@tcew, @kris-rowe, @aprilnovak
+
+We are grateful to all who added new features, filed issues or helped resolve them, 
+asked and answered questions, and were part of inspiring discussions.
+
+A special shout out to Tim Warburton at VT for tuning some critical kernels. 
+
+
+# Release v21.1
+
+## What is new? 
+
+* Flexible GMRES
+* Constant flow rate
+* Time step controller for targetCFL
+* Improved runtime statistics
+* Support for ROCm version > v4.0
+* AVM for scalars
+* FEMSEM preconditioner
+* Update file (nekrs.upd) for runtime modifications
+* Validate key/value input in par
+* Various bug fixes 
+
+## Good to know 
+* [par] `preconditioner = multigrid` was replaced by `preconditioner = multigrid+coarse`
+* [par] Only valid `key/value` pairs will be accepted 
+* [par] Default smootherType is `ASM+Chebyshev+degree=2` (instead of degree=1)
+* [fld] Only first checkpoint will contain mesh coordinates 
+* GMRES is now the default linear solver for pressure (higher memory usage)
+
+## Breaking Changes 
+
+* [udf] Use std namespace qualifier e.g. `std::cout` instead of `cout`
+* [udf] Rename `UDF_LoadKernels(nrs_t *nrs)` => `UDF_LoadKernels(occa::properties& kernelInfo)`
+* [udf] Replace argument `nrs_t *nrs` by `occa::properties& kernelInfo` in `udfBuildKernel()`, `(plugin)::buildKernel()`
+* [udf] `UDF_LoadKernels(occa::properties& kernelInfo)` is no longer optional
+* Code crashes (Segmentation fault: invalid permissions) if MPI installation is not GPU aware unless you specify `NEKRS_GPU_MPI=0` in `$NEKRS_HOME/nekrs.conf`
+
+## Known Bugs / Restrictions
+
+* [383](https://github.com/Nek5000/nekRS/issues/383)
+* [300](https://github.com/Nek5000/nekRS/issues/300)
+* [258](https://github.com/Nek5000/nekRS/issues/258)
+* [201](https://github.com/Nek5000/nekRS/issues/201)
+
+## Thanks to our Contributors
+
+@RonRahaman, @aprilnovak, @yslan
 
 We are grateful to all who added new features, filed issues or helped resolve them, 
 asked and answered questions, and were part of inspiring discussions.

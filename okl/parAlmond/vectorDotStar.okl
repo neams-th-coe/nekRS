@@ -24,23 +24,13 @@ SOFTWARE.
 
 */
 
-// b = b.*a
-@kernel void vectorDotStar1(const dlong N,
-                            @restrict const dfloat * a,
-                            @restrict       dfloat * b){
-
-  for(dlong i=0;i<N;++i;@tile(p_blockSize,@outer,@inner)){
-    b[i] *= a[i];
-  }
-}
-
 // c = alpha*(a.*b) + beta *c
-@kernel void vectorDotStar2(const dlong  N,
-                            const dfloat alpha,
-                            const dfloat beta,
-                            @restrict const dfloat * a,
-                            @restrict const dfloat * b,
-                            @restrict       dfloat * c){
+@kernel void vectorDotStar(const dlong  N,
+                           const pfloat alpha,
+                           const pfloat beta,
+                           @restrict const pfloat * a,
+                           @restrict const pfloat * b,
+                           @restrict       pfloat * c){
 
   for(dlong i=0;i<N;++i;@tile(p_blockSize,@outer,@inner)){
     dfloat ci = 0.0;

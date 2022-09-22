@@ -281,8 +281,11 @@ namespace occa {
         sys::addCompilerLibraryFlags(compilerFlags);
       }
 
-      //---[ PTX Check Command ]--------
       std::stringstream command;
+
+#if 0
+
+      //---[ PTX Check Command ]--------
       if (allProps.has("compiler_env_script")) {
         command << allProps["compiler_env_script"] << " && ";
       }
@@ -299,9 +302,11 @@ namespace occa {
               << " -x cu -c " << sourceFilename
               << " -o "       << ptxBinaryFilename;
 
+#if 0
       if (!verbose) {
         command << " > /dev/null 2>&1";
       }
+#endif
       const std::string &ptxCommand = command.str();
       if (verbose) {
         io::stdout << "Compiling [" << kernelName << "]\n" << ptxCommand << "\n";
@@ -312,13 +317,19 @@ namespace occa {
 #else
       ignoreResult( system(("\"" +  ptxCommand + "\"").c_str()) );
 #endif
-      //================================
+      io::sync(ptxBinaryFilename);
+
+#endif
 
       //---[ Compiling Command ]--------
       command.str("");
       command << allProps["compiler"]
               << ' ' << compilerFlags
-              << " -ptx"
+              << " -fatbin";
+      if(verbose)
+      command << " -Xptxas -v";
+
+      command 
 #if (OCCA_OS == OCCA_WINDOWS_OS)
               << " -D OCCA_OS=OCCA_WINDOWS_OS -D _MSC_VER=1800"
 #endif
@@ -328,15 +339,19 @@ namespace occa {
               << " -x cu " << sourceFilename
               << " -o "    << binaryFilename;
 
+#if 0
       if (!verbose) {
         command << " > /dev/null 2>&1";
       }
+#endif
       const std::string &sCommand = command.str();
       if (verbose) {
         io::stdout << sCommand << '\n';
       }
 
       const int compileError = system(sCommand.c_str());
+
+      io::sync(binaryFilename);
 
       lock.release();
       if (compileError) {
@@ -382,7 +397,7 @@ namespace occa {
 
       // Find device kernels
       orderedKernelMetadata launchedKernelsMetadata = getLaunchedKernelsMetadata(
-        kernelName,
+        kernelName + kernelProps.get<std::string>("kernelNameSuffix", ""),
         deviceMetadata
       );
 

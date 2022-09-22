@@ -27,50 +27,39 @@ SOFTWARE.
 #ifndef PARALMOND_COARSESOLVE_HPP
 #define PARALMOND_COARSESOLVE_HPP
 
+#include <functional>
+
 namespace parAlmond {
 
 class coarseSolver {
 
 public:
-  int coarseTotal;
-  int coarseOffset;
-  int *coarseOffsets=NULL;
-  int *coarseCounts=NULL;
-
   int N;
-  dfloat *invCoarseA=NULL;
 
-  dfloat *xLocal=NULL;
-  dfloat *rhsLocal=NULL;
+  occa::memory h_xBuffer;
+  occa::memory o_xBuffer;
+  pfloat *xBuffer;
 
-  dfloat *xCoarse=NULL;
-  dfloat *rhsCoarse=NULL;
-
-  bool gatherLevel;
   ogs_t *ogs;
-  dfloat *Gx, *Sx;
+  pfloat *Gx, *Sx;
+  occa::memory h_Sx, h_Gx;
   occa::memory o_Sx, o_Gx;
+
+  pfloat *weight = NULL;
+  occa::memory o_weight;
 
   MPI_Comm comm;
   occa::device device;
 
   setupAide options;
+  std::function<void(occa::memory,occa::memory)> semfemSolver = nullptr;
 
   coarseSolver(setupAide options, MPI_Comm comm);
   ~coarseSolver();
 
-  int getTargetSize();
-
-  void setup(parCSR *A);
   void setup(dlong Nrows, hlong* globalRowStarts, dlong nnz, hlong* Ai, hlong* Aj, dfloat* Avals, bool nullSpace);
 
-  void syncToDevice();
-
-  void solve(dfloat *rhs, dfloat *x);
   void solve(occa::memory o_rhs, occa::memory o_x);
-  void gather(occa::memory o_rhs, occa::memory o_x);
-  void scatter(occa::memory o_rhs, occa::memory o_x);
-  void BoomerAMGSolve();
 };
 
 }
