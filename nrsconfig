@@ -1,48 +1,29 @@
 #!/bin/bash
 set -e -a
 
-#########################################################################
-: ${NEKRS_INSTALL_DIR:=${HOME}/.local/nekrs}
+: ${NRSCONFIG_NOBUILD:=0}
 
-: ${NEKRS_CC:="mpicc"}
-: ${NEKRS_CXX:="mpic++"}
-: ${NEKRS_FC:="mpif77"}
-: ${NEKRS_COMPILER_FLAGS:="-O2 -g -march=native -mtune=native -ftree-vectorize"}
-
-: ${OCCA_CXX:="g++"}
-: ${OCCA_CXXFLAGS:="-O3 -g -march=native -mtune=native"}
-#########################################################################
-
-if uname -a | grep 'ppc64'; then
-  NEKRS_COMPILER_FLAGS=$(echo "$NEKRS_COMPILER_FLAGS" | sed -e "s/march/mcpu/g")
+if [ -z ${CC} ] || [ -z ${CXX}  ] || [ -z ${FC}  ]; then
+  echo -e "\033[31mWARNING: env-var CC, CXX or FC is not set!\033[m"
+  export CC=mpicc
+  export CXX=mpic++
+  export FC=mpif77
+  read -p         "Press ENTER to continue with CC=$CC CXX=$CXX FC=$FC or ctrl-c to cancel" 
 fi
 
-: ${NEKRS_CXXFLAGS:="${NEKRS_COMPILER_FLAGS}"}
-: ${NEKRS_CFLAGS:="${NEKRS_COMPILER_FLAGS}"}
-: ${NEKRS_FFLAGS:="${NEKRS_COMPILER_FLAGS}"}
+cmd="cmake -S . -B build -Wfatal-errors $@" 
+echo $cmd
+eval $cmd 
+if [ $? -eq 0 ] && [ ${NRSCONFIG_NOBUILD} -eq 0 ]; then
+  cmd="cmake --build ./build --target install -j8" 
+  echo ""    
+  echo $cmd   
+  read -p "Press ENTER to continue or ctrl-c to cancel"
 
-mkdir -p ${NEKRS_INSTALL_DIR} > /dev/null 2>&1
-NEKRS_INSTALL_DIR=`echo "$(cd "$(dirname "${NEKRS_INSTALL_DIR}")"; pwd)/$(basename "${NEKRS_INSTALL_DIR}")"`
-
-NEKRS_BUILD_DIR=`pwd`/build
-mkdir -p "${NEKRS_BUILD_DIR}" > /dev/null 2>&1
-cd ${NEKRS_BUILD_DIR}
-
-cmake -Wno-dev \
-      -Wfatal-errors \
-      -DCMAKE_INSTALL_PREFIX="${NEKRS_INSTALL_DIR}" \
-      -DCMAKE_Fortran_COMPILER="${NEKRS_FC}" \
-      -DCMAKE_C_COMPILER="${NEKRS_CC}" \
-      -DCMAKE_CXX_COMPILER="${NEKRS_CXX}" \
-      -DCMAKE_Fortran_FLAGS_RELWITHDEBINFO="${NEKRS_FFLAGS}"  \
-      -DCMAKE_C_FLAGS_RELWITHDEBINFO="${NEKRS_CFLAGS}" \
-      -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="${NEKRS_CFLAGS}" \
-      -DOCCA_CXX="${OCCA_CXX}" \
-      -DOCCA_CXXFLAGS="${OCCA_CXXFLAGS}" \
-      $@ \
-      .. 
-
-if [ $? -eq 0 ]; then
-  echo ""        
-  echo "--> Now just run \`cmake --build ./build --target install -j8\`"
+  eval $cmd
+  if [ $? -eq 0 ]; then
+    echo ""
+    echo -e "\033[35mHooray! You're all set. The installation is complete.\033[m"
+    echo ""
+  fi
 fi
