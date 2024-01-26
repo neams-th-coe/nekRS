@@ -20,7 +20,7 @@ if (t < bs) {                                                                   
 {
   for (dlong e = 0; e < Nelements; e++; @outer(0)) {
     for (int fldStart = 0; fldStart < Nfields; fldStart += p_fieldBlockSize) {
-      @shared volatile dfloat s_sum[p_fieldBlockSize][p_blockSize];
+      @shared dfloat s_sum[p_fieldBlockSize][p_blockSize];
 
       // reduce over all element faces
       for (int t = 0; t < p_blockSize; ++t; @inner(0)) {
@@ -39,11 +39,24 @@ if (t < bs) {                                                                   
 
                   const dlong idM = vmapM[sid];
                   const dfloat sWJ = sgeo[sid * p_Nsgeo + p_WSJID];
+#if p_vector
+                  const dfloat nx = sgeo[sid * p_Nsgeo + p_NXID];
+                  const dfloat ny = sgeo[sid * p_Nsgeo + p_NYID];
+                  const dfloat nz = sgeo[sid * p_Nsgeo + p_NZID];
+#endif
 
 #pragma unroll p_fieldBlockSize
                   for (int fld = 0; fld < p_fieldBlockSize; fld++) {
-                    if (fldStart + fld < Nfields)   
-                      s_sum[fld][t] += U[idM + (fldStart + fld) * fieldOffset] * sWJ;
+                    if (fldStart + fld < Nfields) { 
+#if p_vector
+                      const dfloat _U = U[idM + 0 * fieldOffset] * nx + 
+                                        U[idM + 1 * fieldOffset] * ny +
+                                        U[idM + 2 * fieldOffset] * nz;
+#else
+                      const dfloat _U = U[idM + (fldStart + fld) * fieldOffset];
+#endif
+                      s_sum[fld][t] += _U * sWJ;
+                    }
                   }
                 }
               }

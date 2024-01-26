@@ -123,44 +123,40 @@ void meshParallelGatherScatterSetup(mesh_t *mesh,
   mesh->NglobalGatherElements = globalCount;
   mesh->NlocalGatherElements = localCount;
 
-  mesh->o_elementList = platform->device.malloc(mesh->Nelements * sizeof(dlong), mesh->elementList);
+  mesh->o_elementList = platform->device.malloc<dlong>(mesh->Nelements, mesh->elementList);
 
   if (globalCount)
     mesh->o_globalGatherElementList =
-        platform->device.malloc(globalCount * sizeof(dlong), mesh->globalGatherElementList);
+        platform->device.malloc<dlong>(globalCount, mesh->globalGatherElementList);
 
   if (localCount)
     mesh->o_localGatherElementList =
-        platform->device.malloc(localCount * sizeof(dlong), mesh->localGatherElementList);
+        platform->device.malloc<dlong>(localCount, mesh->localGatherElementList);
 
   { // sanity check
     int err = 0;
-    dlong gNelements = mesh->Nelements;
-    MPI_Allreduce(MPI_IN_PLACE, &gNelements, 1, MPI_DLONG, MPI_SUM, platform->comm.mpiComm);
-    const dfloat sum2 = (dfloat)gNelements * mesh->Np;
+    hlong NpGlobal = static_cast<hlong>(mesh->Nelements) * mesh->Np;
+    MPI_Allreduce(MPI_IN_PLACE, &NpGlobal, 1, MPI_HLONG, MPI_SUM, platform->comm.mpiComm);
 
-    occa::memory o_tmp = platform->device.malloc(mesh->Nlocal, sizeof(dfloat));
-    platform->linAlg->fillKernel(mesh->Nlocal, 1.0, o_tmp);
-
+    occa::memory o_tmp = platform->device.malloc<dfloat>(mesh->Nlocal);
+    platform->linAlg->fill(mesh->Nlocal, 1.0, o_tmp);
     ogsGatherScatter(o_tmp, ogsDfloat, ogsAdd, mesh->ogs);
 
-    platform->linAlg->axmyKernel(mesh->Nlocal, 1.0, mesh->ogs->o_invDegree, o_tmp);
-    dfloat *tmp = (dfloat *)calloc(mesh->Nlocal, sizeof(dfloat));
-    o_tmp.copyTo(tmp, mesh->Nlocal * sizeof(dfloat));
-    dfloat sum1 = 0;
-    for (int i = 0; i < mesh->Nlocal; i++)
-      sum1 += tmp[i];
-    MPI_Allreduce(MPI_IN_PLACE, &sum1, 1, MPI_DFLOAT, MPI_SUM, platform->comm.mpiComm);
-    sum1 = abs(sum1 - sum2) / sum2;
-    if (sum1 > 1e-15) {
-      if (platform->comm.mpiRank == 0)
-        printf("ogsGatherScatter test err=%g!\n", sum1);
-      fflush(stdout);
+    std::vector<dfloat> tmp(o_tmp.length());
+    o_tmp.copyTo(tmp.data());
+
+    hlong sum = 0;
+    const dfloat eps = 0.1;
+    for (int i = 0; i < mesh->Nlocal; i++) {
+      dfloat val = tmp[i]*mesh->ogs->invDegree[i];
+      hlong valInt = val/(abs(val)) * (abs(val)+0.5); // rounded to nearest integer
+      sum += valInt;
+    }
+    MPI_Allreduce(MPI_IN_PLACE, &sum, 1, MPI_HLONG, MPI_SUM, platform->comm.mpiComm);
+
+    if (sum - NpGlobal != 0) {
       err++;
     }
-    o_tmp.free();
-
-    nrsCheck(err, platform->comm.mpiComm, EXIT_FAILURE, "%s\n", "sanity check failed");
-    free(tmp);
+    nrsCheck(err, platform->comm.mpiComm, EXIT_FAILURE, "%s\n", "invDegree sanity check failed");
   }
 }

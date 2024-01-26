@@ -28,36 +28,32 @@
 #include "timer.hpp"
 #include "linAlg.hpp"
 
+static dfloat tiny;
+
 GmresData::GmresData(elliptic_t *elliptic)
     : nRestartVectors([&]() {
         int _nRestartVectors = 15;
         elliptic->options.getArgs("PGMRES RESTART", _nRestartVectors);
         return _nRestartVectors;
       }()),
-      flexible([&]() {
-        if (elliptic->options.compareArgs("SOLVER", "FLEXIBLE"))
-          return 1;
-        return 0;
-      }()),
-      o_V(elliptic->fieldOffset * elliptic->Nfields, nRestartVectors, sizeof(dfloat)),
-      o_Z(elliptic->fieldOffset * elliptic->Nfields, flexible ? nRestartVectors : 1, sizeof(dfloat)),
-      o_y(platform->device.malloc(nRestartVectors, sizeof(dfloat))),
+      o_y(platform->device.malloc<dfloat>(nRestartVectors)),
       H((dfloat *)calloc((nRestartVectors + 1) * (nRestartVectors + 1), sizeof(dfloat))),
       sn((dfloat *)calloc(nRestartVectors, sizeof(dfloat))),
       cs((dfloat *)calloc(nRestartVectors, sizeof(dfloat))),
       s((dfloat *)calloc(nRestartVectors + 1, sizeof(dfloat)))
 {
+  tiny = 10*std::numeric_limits<dfloat>::min();
+
   int Nblock = (elliptic->mesh->Nlocal + BLOCKSIZE - 1) / BLOCKSIZE;
-  const size_t Nbytes = nRestartVectors * Nblock * sizeof(dfloat);
-  // pinned scratch buffer
+  const size_t N = nRestartVectors * Nblock;
   {
-    h_scratch = platform->device.mallocHost(Nbytes);
+    h_scratch = platform->device.mallocHost<dfloat>(N);
     scratch = (dfloat *)h_scratch.ptr();
 
-    h_y = platform->device.mallocHost(nRestartVectors * sizeof(dfloat));
+    h_y = platform->device.mallocHost<dfloat>(nRestartVectors);
     y = (dfloat *)h_y.ptr();
   }
-  o_scratch = platform->device.malloc(Nbytes);
+  o_scratch = platform->device.malloc<dfloat>(N);
 }
 
 void initializeGmresData(elliptic_t *elliptic)
@@ -74,22 +70,23 @@ void gmresUpdate(elliptic_t *elliptic, occa::memory o_x, int gmresUpdateSize)
   dfloat *y = elliptic->gmresData->y;
   dfloat *H = elliptic->gmresData->H;
   dfloat *s = elliptic->gmresData->s;
-  deviceVector_t &o_V = elliptic->gmresData->o_V;
-  deviceVector_t &o_Z = elliptic->gmresData->o_Z;
-  occa::memory &o_y = elliptic->gmresData->o_y;
-  occa::memory &o_z = elliptic->o_z;
-  occa::memory &o_tmp = elliptic->o_p;
+  auto &o_V = elliptic->gmresData->o_V;
+  auto &o_Z = elliptic->gmresData->o_Z;
+  auto &o_y = elliptic->gmresData->o_y;
+  auto &o_z = elliptic->o_z;
+  auto &o_tmp = elliptic->o_p;
 
   for (int k = gmresUpdateSize - 1; k >= 0; --k) {
     y[k] = s[k];
 
-    for (int m = k + 1; m < gmresUpdateSize; ++m)
+    for (int m = k + 1; m < gmresUpdateSize; ++m) {
       y[k] -= H[k + m * (nRestartVectors + 1)] * y[m];
+     }
 
-    y[k] /= H[k + k * (nRestartVectors + 1)];
+    y[k] /= (H[k + k * (nRestartVectors + 1)] + tiny);
   }
 
-  o_y.copyFrom(y, gmresUpdateSize * sizeof(dfloat));
+  o_y.copyFrom(y, gmresUpdateSize);
 
   if (elliptic->options.compareArgs("SOLVER", "FLEXIBLE")) {
     elliptic->updatePGMRESSolutionKernel(mesh->Nlocal, elliptic->fieldOffset, gmresUpdateSize, o_y, o_Z, o_x);
@@ -107,50 +104,58 @@ void gmresUpdate(elliptic_t *elliptic, occa::memory o_x, int gmresUpdateSize)
 }
 } // namespace
 
+void free(elliptic_t *elliptic)
+{ 
+  elliptic->gmresData->o_V.free();
+  elliptic->gmresData->o_Z.free();
+}
+
 // Ax=r
 int pgmres(elliptic_t *elliptic,
-           occa::memory &o_r,
-           occa::memory &o_x,
            const dfloat tol,
            const int MAXIT,
-           dfloat &rdotr)
+           dfloat &rdotr,
+           occa::memory &o_r,
+           occa::memory &o_x)
 {
 
   mesh_t *mesh = elliptic->mesh;
   linAlg_t &linAlg = *(platform->linAlg);
 
-  occa::memory &o_w = elliptic->o_p;
-
-  occa::memory &o_Ax = elliptic->o_Ap;
-
-  deviceVector_t &o_V = elliptic->gmresData->o_V;
-  deviceVector_t &o_Z = elliptic->gmresData->o_Z;
-
-  occa::memory &o_y = elliptic->gmresData->o_y;
-  occa::memory &o_weight = elliptic->o_invDegree;
-
-  occa::memory &o_b = elliptic->o_z;
-  o_b.copyFrom(o_r, elliptic->fieldOffset * elliptic->Nfields * sizeof(dfloat));
-
-  dfloat *y = elliptic->gmresData->y;
-  dfloat *H = elliptic->gmresData->H;
-  dfloat *sn = elliptic->gmresData->sn;
-  dfloat *cs = elliptic->gmresData->cs;
-  dfloat *s = elliptic->gmresData->s;
-
   const int nRestartVectors = elliptic->gmresData->nRestartVectors;
-
-  const int flexible = elliptic->options.compareArgs("SOLVER", "FLEXIBLE");
-
   const bool verbose = platform->options.compareArgs("VERBOSE", "TRUE");
   const bool serial = platform->device.mode() == "Serial" || platform->device.mode() == "OpenMP";
+  const int flexible = elliptic->options.compareArgs("SOLVER", "FLEXIBLE");
 
-  int Nblock = (mesh->Nlocal + BLOCKSIZE - 1) / BLOCKSIZE;
-  const dlong Nbytes = Nblock * sizeof(dfloat);
+  elliptic->gmresData->o_V = platform->o_memPool.reserve<dfloat>(static_cast<size_t>(elliptic->fieldOffset) * elliptic->Nfields * nRestartVectors);
+  elliptic->gmresData->o_Z = platform->o_memPool.reserve<dfloat>(static_cast<size_t>(elliptic->fieldOffset) * elliptic->Nfields * ((flexible) ? nRestartVectors : 1));
+
+  auto &o_w = elliptic->o_p;
+
+  auto &o_Ax = elliptic->o_Ap;
+
+  auto &o_V = elliptic->gmresData->o_V;
+  auto &o_Z = elliptic->gmresData->o_Z;
+
+  auto &o_y = elliptic->gmresData->o_y;
+  auto &o_weight = elliptic->o_invDegree;
+
+  auto &o_b = elliptic->o_z;
+  o_b.copyFrom(o_r, elliptic->fieldOffset * elliptic->Nfields);
+
+  auto y = elliptic->gmresData->y;
+  auto H = elliptic->gmresData->H;
+  auto sn = elliptic->gmresData->sn;
+  auto cs = elliptic->gmresData->cs;
+  auto s = elliptic->gmresData->s;
+
+  const auto offset = elliptic->fieldOffset * elliptic->Nfields;
+  const int Nblock = (mesh->Nlocal + BLOCKSIZE - 1) / BLOCKSIZE;
 
   dfloat nr = rdotr / sqrt(elliptic->resNormFactor);
   dfloat error = rdotr;
   const dfloat TOL = tol;
+
 
   if (verbose && (platform->comm.mpiRank == 0)) {
     if (flexible)
@@ -167,18 +172,25 @@ int pgmres(elliptic_t *elliptic,
     s[0] = nr;
 
     // V(:,0) = r/nr
-    linAlg.axpbyMany(mesh->Nlocal, elliptic->Nfields, elliptic->fieldOffset, 1.0 / nr, o_r, 0.0, o_V);
+    linAlg.axpbyMany(mesh->Nlocal, 
+                     elliptic->Nfields, 
+                     elliptic->fieldOffset, 
+                     1. / (nr + tiny), 
+                     o_r, 
+                     0.0, 
+                     o_V);
 
     // Construct orthonormal basis via Gram-Schmidt
     for (int i = 0; i < nRestartVectors; ++i) {
 
-      occa::memory &o_Mv = flexible ? o_Z.at(i) : o_Z.at(0);
+      auto o_Mv = flexible ? o_Z + i*offset : o_Z;
       // z := M^{-1} V(:,i)
-      ellipticPreconditioner(elliptic, o_V.at(i), o_Mv);
+      ellipticPreconditioner(elliptic, o_V + i*offset, o_Mv);
 
       // w := A z
-      ellipticOperator(elliptic, o_Mv, o_w, dfloatString);
+      ellipticOperator(elliptic, static_cast<const occa::memory>(o_Mv), o_w, dfloatString);
 
+      // classical Gram-Schmidt
 #if USE_WEIGHTED_INNER_PROD_MULTI_DEVICE
       linAlg.weightedInnerProdMulti(mesh->Nlocal,
                                     (i + 1),
@@ -189,7 +201,7 @@ int pgmres(elliptic_t *elliptic,
                                     o_w,
                                     platform->comm.mpiComm,
                                     o_y);
-      o_y.copyTo(y, (i + 1) * sizeof(dfloat));
+      o_y.copyTo(y, (i + 1) );
 #else
       linAlg.weightedInnerProdMulti(mesh->Nlocal,
                                     (i + 1),
@@ -200,7 +212,7 @@ int pgmres(elliptic_t *elliptic,
                                     o_w,
                                     platform->comm.mpiComm,
                                     y);
-      o_y.copyFrom(y, (i + 1) * sizeof(dfloat));
+      o_y.copyFrom(y, (i + 1));
 #endif
 
       elliptic->gramSchmidtOrthogonalizationKernel(Nblock,
@@ -218,7 +230,7 @@ int pgmres(elliptic_t *elliptic,
         nw = *((dfloat *)elliptic->gmresData->o_scratch.ptr());
       }
       else {
-        elliptic->gmresData->o_scratch.copyTo(elliptic->gmresData->scratch, sizeof(dfloat) * Nblock);
+        elliptic->gmresData->o_scratch.copyTo(elliptic->gmresData->scratch, Nblock);
         for (int k = 0; k < Nblock; ++k)
           nw += elliptic->gmresData->scratch[k];
       }
@@ -230,18 +242,20 @@ int pgmres(elliptic_t *elliptic,
         platform->flopCounter->add("gramSchmidt", flopCount);
       }
 
+      //apply Givens rotations to new column
       // H(i+1,i) = ||w||_2
       H[i + 1 + i * (nRestartVectors + 1)] = nw;
 
       // V(:,i+1) = w/nw
       if (i < nRestartVectors - 1) {
+        auto o_Vi = o_V + (i + 1)*offset;
         linAlg.axpbyMany(mesh->Nlocal,
                          elliptic->Nfields,
                          elliptic->fieldOffset,
-                         (1. / nw),
+                         1. / (nw + tiny),
                          o_w,
-                         0.,
-                         o_V.at(i + 1));
+                         0,
+                         o_Vi);
       }
 
       // apply Givens rotation
@@ -259,7 +273,7 @@ int pgmres(elliptic_t *elliptic,
       // form i-th rotation matrix
       const dfloat h1 = H[i + i * (nRestartVectors + 1)];
       const dfloat h2 = H[i + 1 + i * (nRestartVectors + 1)];
-      const dfloat hr = sqrt(h1 * h1 + h2 * h2);
+      const dfloat hr = sqrt(h1 * h1 + h2 * h2) + tiny;
       cs[i] = h1 / hr;
       sn[i] = h2 / hr;
 
@@ -316,7 +330,7 @@ int pgmres(elliptic_t *elliptic,
     }
     else {
       nr = 0.0;
-      elliptic->gmresData->o_scratch.copyTo(elliptic->gmresData->scratch, Nblock * sizeof(dfloat));
+      elliptic->gmresData->o_scratch.copyTo(elliptic->gmresData->scratch, Nblock);
       for (dlong n = 0; n < Nblock; ++n)
         nr += elliptic->gmresData->scratch[n];
     }
@@ -332,9 +346,12 @@ int pgmres(elliptic_t *elliptic,
     error = nr * sqrt(elliptic->resNormFactor);
     rdotr = nr * sqrt(elliptic->resNormFactor);
     // exit if tolerance is reached
-    if (error <= TOL)
+    if (error <= TOL) {
+      free(elliptic);
       return iter;
+    }
   }
 
+  free(elliptic);
   return iter;
 }

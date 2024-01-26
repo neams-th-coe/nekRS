@@ -1,3 +1,5 @@
+#include "bcMap.hpp"
+#include "mesh.h"
 #include <nrs.hpp>
 #include <compileKernels.hpp>
 #include <limits>
@@ -25,6 +27,17 @@ void registerNekNekKernels()
   std::string fileName = oklpath + "/neknek/" + kernelName + ".okl";
   platform->kernels.add(kernelName, fileName, platform->kernelInfo);
 
+  auto surfaceFluxKernelInfo = platform->kernelInfo;
+  surfaceFluxKernelInfo += meshKernelProperties(N);
+  bcMap::addKernelConstants(surfaceFluxKernelInfo);
+  kernelName = "computeFlux";
+  fileName = oklpath + "/neknek/" + kernelName + ".okl";
+  platform->kernels.add(kernelName, fileName, surfaceFluxKernelInfo);
+
+  kernelName = "fixSurfaceFlux";
+  fileName = oklpath + "/neknek/" + kernelName + ".okl";
+  platform->kernels.add(kernelName, fileName, surfaceFluxKernelInfo);
+
   auto findptsKernelInfo = platform->kernelInfo;
   findptsKernelInfo["includes"].asArray();
   findptsKernelInfo["defines/p_D"] = 3;
@@ -40,7 +53,7 @@ void registerNekNekKernels()
   findptsKernelInfo["defines/dlong"] = dlongString;
   findptsKernelInfo["defines/hlong"] = hlongString;
   findptsKernelInfo["defines/dfloat"] = dfloatString;
-  findptsKernelInfo["defines/DBL_MAX"] = std::numeric_limits<dfloat>::max();
+  findptsKernelInfo["defines/DBL_MAX"] = 1e30;
 
   // findpts kernel currently requires INNER_SIZE > 3 * p_Nq
   // However, we must also make this a multiple of the warp size

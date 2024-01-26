@@ -60,7 +60,8 @@ boomerAMG_t::boomerAMG_t(int _nRows,
     params[7] = 0.25; /* threshold */
     params[8] = 0.0;  /* non galerkin tolerance */
     params[9] = 0;    /* agressive coarsening */
-    params[10] = 2;    /* chebyRelaxOrder */
+    params[10] = 2;   /* chebyRelaxOrder */
+    params[11] = 0.3; /* chebyFraction */
   }
 
   long long rowStart = nRows;
@@ -172,7 +173,7 @@ boomerAMG_t::boomerAMG_t(int _nRows,
   HYPRE_BoomerAMGSetKeepTranspose(*solver, 1);
 
   HYPRE_BoomerAMGSetChebyOrder(*solver, params[10]);
-  // HYPRE_BoomerAMGSetChebyFraction(*solver, 0.2);
+  HYPRE_BoomerAMGSetChebyFraction(*solver, params[11]);
 
   if (params[5] > 0) {
     HYPRE_BoomerAMGSetCycleRelaxType(*solver, params[5], 1);
@@ -316,7 +317,7 @@ boomerAMG_t::boomerAMG_t(int nrows,
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   if (rank == 0)
-    printf("ERROR: Recompile with HYPRE GPU support!\n");
+    printf("ERROR: HYPRE+DEVICE not enabled! Recompile with -DENABLE_HYPRE_GPU=ON\n");
   MPI_Abort(MPI_COMM_WORLD, 1);
 }
 
@@ -326,7 +327,7 @@ boomerAMG_t::solve(const occa::memory &o_b, const occa::memory &o_x)
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   if (rank == 0)
-    printf("ERROR: Recompile with HYPRE GPU support!\n");
+    printf("ERROR: HYPRE+DEVICE not enabled! Recompile with -DENABLE_HYPRE_GPU=ON\n");
   MPI_Abort(MPI_COMM_WORLD, 1);
 }
 

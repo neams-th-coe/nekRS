@@ -86,8 +86,12 @@ solver                      none                                       linear so
                             PFGMRES [D for PRESSURE] 
                               +nVector=<int>                           dimension of Krylov space
 
-residualTol                 <float>                                    absolute residual tolerance  
-                            +relative                                  use relative residual
+residualTol                 <float>                                    absolute linear solver residual tolerance 
+                            1e-4 [D] 
+                            +relative=<float>                          use absolute/relative residual (whatever is reached first) 
+
+absoluteTol                 <float>                                    absolute solver tolerance (for CVODE only) 
+                            1e-6 [D] 
 
 initialGuess                previous
                             extrapolation [D] 
@@ -104,11 +108,11 @@ coarseGridDiscretization    FEM [D]                                    linear fi
                             SEMFEM                                     linear FEM approx on high-order nodes
 
 coarseSolver/semfemSolver   smoother                                     
+                            AMGX                                       NVIDIA's AMG solver
                             boomerAMG [D]                              HYPRE's AMG solver
-                            AmgX                                       NVIDIA's AMG solver
-                            +device [D for SEMFEM] 
-                              +overlap                                 overlap coarse grid solve in additive MG cycle
-                            +cpu [D for multigrid]
+                              +cpu [D for multigrid]
+                              +device [D for SEMFEM] 
+                                +overlap                                 overlap coarse grid solve in additive MG cycle
 
 pMGSchedule                 p=<int>, degree=<int>, ...                 custom polynomial order and Chebyshev order for each pMG level
 
@@ -201,23 +205,23 @@ strongThreshold             <float>
 nonGalerkinTol              <float>                                    set 0 to classical Galerkin sparsification
 aggressiveCoarseningLevels  <int>
 chebyshevRelaxOrder         <int>
+chebyshevFraction           <float>
 ----------------------------------------------------------------------------------------------------------------------
 [AMGX]
 
 configFile                  <string>                                   AmgX JSON configuration file
 ----------------------------------------------------------------------------------------------------------------------
 [CVODE]
-solver                      GMRES                                      linear solver
+solver                      cbGMRES [D], GMRES                         linear solver
                               +nVector=<int>                           dimension of Krylov space
+gsType                      classical [D], classical1, modified
 relativeTol                 <float>                                    relative tolerance
                             1e-4 [D]
-absoluteTol                 <float>                                    absolute tolerance
-                            1e-6 [D]
-hmaxRatio                   <float>                                    max CVODE stepsize ratio relative to outer dt
-                            3 [D]
-epslin                      <float>                                    ratio between linear and nonlinear tolerances
-                            0.1 [D]
-sigScale                    <float>                                    multiplier for Jv difference quotient 
+epsLin                      <float>                                    ratio between linear and nonlinear tolerances
+                            0.5 [D]
+sigScale                    <float>                                    scaling coeff for Jv difference quotient 
                             1.0 [D]
-sharedRho                   true, false [D]                            use same density for all but the first scalar
+maxSteps                    <int>
+sharedRho                   true, false [D]                            use same "density" field for all but the first scalar
 jtvRecycleProperties        true [D], false                            recycle property (freeze) evaluation for Jv
+dealiasing                  true, false

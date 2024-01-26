@@ -25,7 +25,7 @@ boundaryAlignment_t computeAlignment(mesh_t *mesh, dlong element, dlong face)
   dfloat nzDiff = 0.0;
 
   std::vector<dfloat> sgeo;
-  sgeo.reserve(mesh->o_sgeo.size()/sizeof(dfloat));
+  sgeo.reserve(mesh->o_sgeo.length());
   mesh->o_sgeo.copyTo(sgeo.data());
 
   for (int fp = 0; fp < mesh->Nfp; ++fp) {
@@ -60,7 +60,7 @@ static std::map<std::pair<std::string, int>, int> bToBc;
 static bool importFromNek = true;
 
 static std::map<std::string, int> vBcTextToID = {
-    {"periodic", 0},
+//    {"periodic", 0},
     {"zerovalue", bcMap::bcTypeW},
     {"interpolation", bcMap::bcTypeINT},
     {"codedfixedvalue", bcMap::bcTypeV},
@@ -82,7 +82,7 @@ static std::map<std::string, int> vBcTextToID = {
 };
 
 static std::map<int, std::string> vBcIDToText = {
-    {0, "periodic"},
+//    {0, "periodic"},
     {bcMap::bcTypeW, "zeroValue"},
     {bcMap::bcTypeINT, "interpolation"},
     {bcMap::bcTypeV, "codedFixedValue"},
@@ -102,21 +102,23 @@ static std::map<int, std::string> vBcIDToText = {
     {bcMap::bcTypeNone ,"none"}
 };
 
-static std::map<std::string, int> sBcTextToID = {{"periodic", 0},
-                                                 {"interpolation", bcMap::bcTypeINTS},
-                                                 {"codedfixedvalue", bcMap::bcTypeS},
-                                                 {"zerogradient", bcMap::bcTypeF0},
-                                                 {"codedfixedgradient", bcMap::bcTypeF},
-                                                 {"codedFixedgradient", bcMap::bcTypeF},
-                                                 {"none", bcMap::bcTypeNone}
+static std::map<std::string, int> sBcTextToID = {
+//    {"periodic", 0},
+    {"interpolation", bcMap::bcTypeINTS},
+    {"codedfixedvalue", bcMap::bcTypeS},
+    {"zerogradient", bcMap::bcTypeF0},
+    {"codedfixedgradient", bcMap::bcTypeF},
+    {"codedFixedgradient", bcMap::bcTypeF},
+    {"none", bcMap::bcTypeNone}
 };
 
-static std::map<int, std::string> sBcIDToText = {{0, "periodic"},
-                                                 {bcMap::bcTypeINTS, "interpolation"},
-                                                 {bcMap::bcTypeS, "codedFixedValue"},
-                                                 {bcMap::bcTypeF0, "zeroGradient"},
-                                                 {bcMap::bcTypeF, "codedFixedGradient"},
-                                                 {bcMap::bcTypeNone ,"none"}
+static std::map<int, std::string> sBcIDToText = {
+//    {0, "periodic"},
+    {bcMap::bcTypeINTS, "interpolation"},
+    {bcMap::bcTypeS, "codedFixedValue"},
+    {bcMap::bcTypeF0, "zeroGradient"},
+    {bcMap::bcTypeF, "codedFixedGradient"},
+    {bcMap::bcTypeNone ,"none"}
 };
 
 static void v_setup(std::string s);
@@ -262,12 +264,15 @@ void setupField(std::vector<std::string> slist, std::string field)
   if (slist.size() == 0)
     return;
 
-  importFromNek = false;
+  if (slist.size()) {
+    importFromNek = false;
+
+    if (slist.size() == 1 && slist[0] == "none") {
+      return;
+    } 
+  }
+
   lowerCase(field);
-
-  if (slist[0].compare("none") == 0)
-    return;
-
   fields.insert(field);
 
   if (field.compare("velocity") == 0)
@@ -336,7 +341,7 @@ void setup()
 
 void deriveMeshBoundaryConditions(std::vector<std::string> velocityBCs)
 {
-  if (velocityBCs.size() == 0 || velocityBCs[0].compare("none") == 0) return;
+  if (velocityBCs.size() == 0) return;
 
   meshConditionsDerived = true;
 
@@ -470,8 +475,9 @@ int ellipticType(int bid, std::string field)
       const int bcID = bToBc.at({field, bid - 1});
 
       bcType = NEUMANN;
-      if (bcID == bcTypeS)
+      if (bcID == bcTypeS || bcID == bcTypeINTS) {
         bcType = DIRICHLET;
+      }
       if (bcID == bcTypeNone)
         bcType = NO_OP;
     }
@@ -551,8 +557,9 @@ void checkBoundaryAlignment(mesh_t *mesh)
 {
   bool bail = false;
   for (auto &&field : fields) {
-    if (field != std::string("velocity") && field != std::string("mesh"))
+    if (field != std::string("velocity") && field != std::string("mesh")) {
       continue;
+    }
 
     const int nid = size(field);
 

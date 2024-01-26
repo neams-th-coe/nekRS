@@ -29,8 +29,6 @@
 #include "platform.hpp"
 #include "linAlg.hpp"
 
-occa::memory elliptic_t::o_wrk = occa::memory();
-
 void checkConfig(elliptic_t *elliptic)
 {
   mesh_t *mesh = elliptic->mesh;
@@ -70,6 +68,13 @@ void checkConfig(elliptic_t *elliptic)
         printf("Multigrid + coarse solve only supported for Poisson type equations\n");
       err++;
     }
+  }
+
+  if (options.compareArgs("SOLVER", "PCG+COMBINED") && 
+      !options.compareArgs("PRECONDITIONER", "JACO")) {
+      if (platform->comm.mpiRank == 0)
+        printf("combinedPCG requires Jacobi preconditioner!\n");
+      err++;
   }
 
   if (elliptic->mesh->ogs == NULL) {
@@ -162,7 +167,7 @@ void ellipticSolveSetup(elliptic_t *elliptic)
   MPI_Allreduce(&NelementsLocal, &NelementsGlobal, 1, MPI_HLONG, MPI_SUM, platform->comm.mpiComm);
   elliptic->NelementsGlobal = NelementsGlobal;
 
-  elliptic->o_EToB = platform->device.malloc(mesh->Nelements * mesh->Nfaces * elliptic->Nfields * sizeof(int),
+  elliptic->o_EToB = platform->device.malloc<int>(mesh->Nelements * mesh->Nfaces * elliptic->Nfields,
                                              elliptic->EToB);
 
   checkConfig(elliptic);
@@ -176,13 +181,30 @@ void ellipticSolveSetup(elliptic_t *elliptic)
     elliptic->fusedResidualAndNormKernel = platform->kernels.get(sectionIdentifier + "fusedResidualAndNorm");
   }
 
+  if (options.compareArgs("SOLVER", "PCG+COMBINED")) {
+    const std::string sectionIdentifier = std::to_string(elliptic->Nfields) + "-";
+    elliptic->combinedPCGPreMatVecKernel = platform->kernels.get(sectionIdentifier + "combinedPCGPreMatVec");
+    elliptic->combinedPCGPostMatVecKernel =
+        platform->kernels.get(sectionIdentifier + "combinedPCGPostMatVec");
+    elliptic->combinedPCGUpdateConvergedSolutionKernel =
+        platform->kernels.get(sectionIdentifier + "combinedPCGUpdateConvergedSolution");
+  }
+
   mesh->maskKernel = platform->kernels.get("mask");
   mesh->maskPfloatKernel = platform->kernels.get("maskPfloat");
  
-  ellipticUpdateWorkspace(elliptic);
+  ellipticAllocateWorkspace(elliptic);
 
-  elliptic->tmpNormr = (dfloat *)calloc(Nblocks, sizeof(dfloat));
-  elliptic->o_tmpNormr = platform->device.malloc(Nblocks * sizeof(dfloat), elliptic->tmpNormr);
+  int Nreductions = 1;
+  if (options.compareArgs("SOLVER", "PCG+COMBINED")) {
+    Nreductions = CombinedPCGId::nReduction;
+  }
+
+  elliptic->h_tmpHostScalars = platform->device.mallocHost<dfloat>(Nreductions * Nblocks);
+  elliptic->tmpHostScalars = elliptic->h_tmpHostScalars.ptr<dfloat>();
+  std::fill(elliptic->tmpHostScalars, elliptic->tmpHostScalars + Nreductions * Nblocks, 0.0);
+  elliptic->o_tmpHostScalars =
+      platform->device.malloc<dfloat>(Nreductions * Nblocks, elliptic->tmpHostScalars);
 
   elliptic->allNeumann = 0;
   if (elliptic->poisson) {
@@ -320,6 +342,8 @@ void ellipticSolveSetup(elliptic_t *elliptic)
     elliptic->solutionProjection = new SolutionProjection(*elliptic, type, nVecsProject, nStepsStart);
   }
 
+  ellipticFreeWorkspace(elliptic);
+
   MPI_Barrier(platform->comm.mpiComm);
   if (platform->comm.mpiRank == 0)
     printf("done (%gs)\n", MPI_Wtime() - tStart);
@@ -330,7 +354,11 @@ elliptic_t::~elliptic_t()
 {
   if (precon)
     delete this->precon;
-  free(this->tmpNormr);
-  this->o_tmpNormr.free();
+  if (this->o_tmpHostScalars.size()) {
+    this->o_tmpHostScalars.free();
+    this->h_tmpHostScalars.free();
+  }
+  this->h_tmpHostScalars.free();
+  this->o_tmpHostScalars.free();
   this->o_EToB.free();
 }

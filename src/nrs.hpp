@@ -11,12 +11,13 @@
 #include "neknek.hpp"
 #include "cvode.hpp"
 #include "fldFile.hpp"
+#include "randomVector.hpp"
 
-std::vector<std::string> fieldsToSolve(setupAide& options);
+std::vector<std::string> fieldsToSolve(setupAide &options);
 
 struct nrs_t {
 
-  static constexpr double targetTimeBenchmark {0.2};
+  static constexpr double targetTimeBenchmark{0.2};
 
   bool multiSession;
 
@@ -56,7 +57,7 @@ struct nrs_t {
   dfloat g0, ig0;
   dfloat CFL, unitTimeCFL;
 
-  dfloat timePrevious;
+  double timePrevious;
 
   dfloat p0th[3] = {0.0, 0.0, 0.0};
   dfloat p0the = 0.0;
@@ -92,6 +93,8 @@ struct nrs_t {
   occa::memory o_idH;
 
   occa::memory o_BF;
+  occa::memory o_BFDiag;
+
   occa::memory o_FU;
 
   occa::memory o_prop, o_ellipticCoeff;
@@ -117,21 +120,19 @@ struct nrs_t {
 
   int filterNc;
   dfloat filterS;
-  occa::memory o_filterMT;
+  occa::memory o_filterRT;
 
   occa::kernel filterRTKernel;
   occa::kernel advectMeshVelocityKernel;
   occa::kernel pressureAddQtlKernel;
   occa::kernel pressureStressKernel;
   occa::kernel extrapolateKernel;
+
   occa::kernel subCycleRKKernel;
   occa::kernel subCycleInitU0Kernel;
   occa::kernel nStagesSum3Kernel;
   occa::kernel wgradientVolumeKernel;
 
-  occa::kernel subCycleVolumeKernel, subCycleCubatureVolumeKernel;
-  occa::kernel subCycleSurfaceKernel, subCycleCubatureSurfaceKernel;
-  occa::kernel subCycleRKUpdateKernel;
   occa::kernel subCycleStrongCubatureVolumeKernel;
   occa::kernel subCycleStrongVolumeKernel;
 
