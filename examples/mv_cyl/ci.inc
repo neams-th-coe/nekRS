@@ -5,6 +5,8 @@ static int ciMode = 0;
 
 #define EPS 1e-1
 
+double numCVODERHS = 0;
+
 void ciSetup(MPI_Comm comm, setupAide &options)
 {
   options.setArgs("POLYNOMIAL DEGREE", std::string("7"));
@@ -54,33 +56,28 @@ void ciSetup(MPI_Comm comm, setupAide &options)
   if (ciMode == 7 || ciMode == 8) {
     // cvode
     options.setArgs("CVODE", "TRUE");
-    options.setArgs("CVODE INTEGRATOR", "BDF");
-    options.setArgs("CVODE MAX TIMESTEPPER ORDER", "3");
-    options.setArgs("CVODE EPS LIN", "0.05");
-    options.setArgs("CVODE STOP TIME", "TRUE");
 
     double dt0;
     options.getArgs("DT", dt0);
 
-    const auto hmaxRatio = 1;
-    options.setArgs("CVODE HMAX RATIO", to_string_f(hmaxRatio));
-
-    const auto maxSteps = 10000;
-    options.setArgs("CVODE MAX STEPS", std::to_string(maxSteps));
-
+    options.setArgs("SCALAR00 CVODE ABSOLUTE TOLERANCE", "1e-08");
     options.setArgs("CVODE RELATIVE TOLERANCE", "1e-06");
-    options.setArgs("CVODE ABSOLUTE TOLERANCE", "1e-08");
-    options.setArgs("CVODE GMR VECTORS", "20");
-
     options.setArgs("SCALAR00 SOLVER", "CVODE");
   }
 }
 
-void ciTestErrors(nrs_t *nrs, dfloat time, int tstep)
+void ciTestErrors(nrs_t *nrs, double time, int tstep)
 {
+  if (nrs->cds->cvode) {
+    numCVODERHS += nrs->cds->cvode->numRHSEvals();
+    numCVODERHS += nrs->cds->cvode->numLinIters();
+  }
+
   if (!nrs->lastStep) {
     return;
   }
+
+  numCVODERHS /= tstep;
 
   const int rank = platform->comm.mpiRank;
   mesh_t *mesh = nrs->meshV;
@@ -160,4 +157,14 @@ void ciTestErrors(nrs_t *nrs, dfloat time, int tstep)
     printf("\n");
   }
   passed ? (CIPASS) : (CIFAIL);
+
+  if (nrs->cds->cvode) {
+    dfloat expectedCVODERHS = 1.77;
+    if (rank == 0) {
+      printf("CVODE RHS evaluations per timestep: expected = %g, actual = %g\n",
+             expectedCVODERHS,
+             numCVODERHS);
+    }
+    numCVODERHS > 1.1 * expectedCVODERHS ? (CIFAIL) : (CIPASS);
+  }
 }

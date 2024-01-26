@@ -2,18 +2,19 @@
 #include "nrs.hpp"
 #include "linAlg.hpp"
 
-occa::memory cdsSolve(const int is, cds_t* cds, dfloat time, int stage)
+occa::memory cdsSolve(const int is, cds_t* cds, double time, int stage)
 {
   std::string sid = scalarDigitStr(is);
 
-  platform->timer.tic("scalar rhs", 1);  
   mesh_t* mesh = cds->mesh[0];
   if(is) {
     mesh = cds->meshV;
   }
 
-  platform->o_mempool.slice1.copyFrom(cds->o_BF, cds->fieldOffset[is] * sizeof(dfloat), 0,  
-                                      cds->fieldOffsetScan[is] * sizeof(dfloat));
+  platform->timer.tic("scalar rhs", 1);
+
+  auto o_rhs = platform->o_memPool.reserve<dfloat>(cds->fieldOffset[is]);
+  o_rhs.copyFrom(cds->o_BF, cds->fieldOffset[is], 0, cds->fieldOffsetScan[is]);
 
   cds->neumannBCKernel(mesh->Nelements,
                        1,
@@ -23,6 +24,7 @@ occa::memory cdsSolve(const int is, cds_t* cds, dfloat time, int stage)
                        is,
                        time,
                        cds->fieldOffset[is],
+                       0,
                        cds->EToBOffset,
                        mesh->o_x,
                        mesh->o_y,
@@ -33,19 +35,24 @@ occa::memory cdsSolve(const int is, cds_t* cds, dfloat time, int stage)
                        cds->o_diff,
                        cds->o_rho,
                        *(cds->o_usrwrk),
-                       cds->o_BF);
+                       o_rhs);
 
   platform->timer.toc("scalar rhs");
 
-  const occa::memory &o_S0 =
-      (platform->options.compareArgs("SCALAR" + sid + " INITIAL GUESS", "EXTRAPOLATION") && stage == 1)
-          ? cds->o_Se.slice(cds->fieldOffsetScan[is] * sizeof(dfloat), cds->fieldOffset[is] * sizeof(dfloat))
-          : cds->o_S.slice(cds->fieldOffsetScan[is] * sizeof(dfloat), cds->fieldOffset[is] * sizeof(dfloat));
-  platform->o_mempool.slice0.copyFrom(o_S0, mesh->Nlocal * sizeof(dfloat));
-  auto o_BF_i = cds->o_BF.slice(cds->fieldOffsetScan[is] * sizeof(dfloat), cds->fieldOffset[is] * sizeof(dfloat));
-  ellipticSolve(cds->solver[is], o_BF_i, platform->o_mempool.slice0);
+  auto o_S = [&]()
+  {
+     auto o_S0 = platform->o_memPool.reserve<dfloat>(cds->fieldOffset[is]);
+     if (platform->options.compareArgs("SCALAR" + sid + " INITIAL GUESS", "EXTRAPOLATION") && stage == 1)
+       o_S0.copyFrom(cds->o_Se, cds->fieldOffset[is], 0, cds->fieldOffsetScan[is]);
+     else
+       o_S0.copyFrom(cds->o_S, cds->fieldOffset[is], 0, cds->fieldOffsetScan[is]);
+     
+     return o_S0;
+  }();
 
-  return platform->o_mempool.slice0;
+  ellipticSolve(cds->solver[is], o_rhs, o_S);
+
+  return o_S;
 }
 
 

@@ -14,7 +14,7 @@ static dfloat rho, mueLam;
 
 #endif
 
-void extractLine(nrs_t *nrs, dfloat time, int tstep)
+void extractLine(nrs_t *nrs, double time, int tstep)
 {
   const auto np = (platform->comm.mpiRank == 0) ? 200 : 0;
   const auto offset = np;
@@ -47,7 +47,7 @@ void extractLine(nrs_t *nrs, dfloat time, int tstep)
       xp.push_back(x0);
       yp.push_back(yMax);
       zp.push_back(z0);
-      o_Up = platform->device.malloc(nrs->NVfields * offset * sizeof(dfloat));
+      o_Up = platform->device.malloc<dfloat>(nrs->NVfields * offset);
     }
 
     interpolator = new pointInterpolation_t(nrs);
@@ -70,7 +70,7 @@ void extractLine(nrs_t *nrs, dfloat time, int tstep)
   }
 }
 
-void userq(nrs_t *nrs, dfloat time, occa::memory o_S, occa::memory o_FS)
+void userq(nrs_t *nrs, double time, occa::memory o_S, occa::memory o_FS)
 {
   mesh_t *mesh = nrs->meshV;
   cds_t *cds = nrs->cds;
@@ -79,7 +79,7 @@ void userq(nrs_t *nrs, dfloat time, occa::memory o_S, occa::memory o_FS)
 }
 
 void uservp(nrs_t *nrs,
-            dfloat time,
+            double time,
             occa::memory o_U,
             occa::memory o_S,
             occa::memory o_UProp,
@@ -94,8 +94,19 @@ void uservp(nrs_t *nrs,
   platform->options.getArgs("SCALAR00 DIFFUSIVITY", conductivity);
   const dfloat Pr_t = 0.7;
   occa::memory o_mue_t = RANSktau::o_mue_t();
-  occa::memory o_temp_mue = cds->o_diff + 0 * cds->fieldOffset[0] * sizeof(dfloat);
+  occa::memory o_temp_mue = cds->o_diff + 0 * cds->fieldOffset[0];
   scalarScaledAdd(mesh->Nlocal, conductivity, 1 / Pr_t, o_mue_t, o_temp_mue);
+}
+
+void UDF_LoadKernels(occa::properties& kernelInfo)
+{
+#if 0
+  {
+    auto props = kernelInfo;
+    props["defines/p_sigma_k"] = 0.6;
+    RANSktau::buildKernel(props);
+  }
+#endif
 }
 
 void UDF_Setup0(MPI_Comm comm, setupAide &options)
@@ -121,7 +132,7 @@ void UDF_Setup(nrs_t *nrs)
   RANSktau::setup(nrs, mueLam, rho, scalarFieldStart);
 }
 
-void UDF_ExecuteStep(nrs_t *nrs, dfloat time, int tstep)
+void UDF_ExecuteStep(nrs_t *nrs, double time, int tstep)
 {
   if (ciMode) {
     ciTestErrors(nrs, time, tstep);

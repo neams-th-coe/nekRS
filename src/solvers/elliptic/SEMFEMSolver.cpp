@@ -27,15 +27,14 @@ SEMFEMSolver_t::SEMFEMSolver_t(elliptic_t* elliptic_)
   for(int i = 0; i < mesh->Np*mesh->Nelements; ++i) mask[i] = 1.0;
   if(elliptic->Nmasked > 0){
     dlong* maskIds = (dlong*) calloc(elliptic->Nmasked, sizeof(dlong));
-    elliptic->o_maskIds.copyTo(maskIds, elliptic->Nmasked * sizeof(dlong));
+    elliptic->o_maskIds.copyTo(maskIds, elliptic->Nmasked);
     for (dlong i = 0; i < elliptic->Nmasked; i++) mask[maskIds[i]] = 0.;
     free(maskIds);
   }
 
   // here we assume lambda0 is constant (in space and time)
   // use first entry of o_lambda as representative value
-  pfloat lambda0;
-  elliptic->o_lambda0.copyTo(&lambda0, sizeof(pfloat));
+  const dfloat lambda0 = elliptic->lambda0Avg;
 
   auto hypreIJ = new hypreWrapper::IJ_t();
   matrix_t* matrix = build(
@@ -56,10 +55,10 @@ SEMFEMSolver_t::SEMFEMSolver_t(elliptic_t* elliptic_)
   const dlong numRows = matrix->rowEnd - matrix->rowStart + 1;
   numRowsSEMFEM = numRows;
 
-  o_dofMap = platform->device.malloc(numRows * sizeof(long long), matrix->dofMap);
+  o_dofMap = platform->device.malloc<long long>(numRows, matrix->dofMap);
 
-  o_SEMFEMBuffer1 = platform->device.malloc(numRows * sizeof(pfloat));
-  o_SEMFEMBuffer2 = platform->device.malloc(numRows * sizeof(pfloat));
+  o_SEMFEMBuffer1 = platform->device.malloc<pfloat>(numRows);
+  o_SEMFEMBuffer2 = platform->device.malloc<pfloat>(numRows);
   if(!useDevice){
     SEMFEMBuffer1_h_d = (pfloat*) calloc(numRows, sizeof(pfloat));
     SEMFEMBuffer2_h_d = (pfloat*) calloc(numRows, sizeof(pfloat));
@@ -79,6 +78,7 @@ SEMFEMSolver_t::SEMFEMSolver_t(elliptic_t* elliptic_)
       settings[9]  = 0.05; /* non galerkin tol             */
       settings[10] = 0;    /* aggressive coarsening levels */
       settings[11] = 1;    /* chebyRelaxOrder */
+      settings[12] = 0.3;  /* chebyRelaxOrder */
 
       if(elliptic->options.compareArgs("MULTIGRID SEMFEM", "TRUE")) {
         settings[4]  = 16;
@@ -95,6 +95,7 @@ SEMFEMSolver_t::SEMFEMSolver_t(elliptic_t* elliptic_)
       platform->options.getArgs("BOOMERAMG NONGALERKIN TOLERANCE" , settings[9]);
       platform->options.getArgs("BOOMERAMG AGGRESSIVE COARSENING LEVELS" , settings[10]);
       platform->options.getArgs("BOOMERAMG CHEBYSHEV RELAX ORDER" , settings[11]);
+      platform->options.getArgs("BOOMERAMG CHEBYSHEV FRACTION" , settings[12]);
 
       if(platform->device.mode() != "Serial" && useDevice) {
         boomerAMG = new hypreWrapperDevice::boomerAMG_t(
@@ -196,10 +197,10 @@ void SEMFEMSolver_t::run(occa::memory& o_r, occa::memory& o_z)
 
     if(!useDevice)
     {
-      o_bufr.copyTo(SEMFEMBuffer1_h_d, numRowsSEMFEM * sizeof(pfloat));
+      o_bufr.copyTo(SEMFEMBuffer1_h_d, numRowsSEMFEM);
       auto boomerAMG = (hypreWrapper::boomerAMG_t*) this->boomerAMG;
       boomerAMG->solve(SEMFEMBuffer1_h_d, SEMFEMBuffer2_h_d);
-      o_bufz.copyFrom(SEMFEMBuffer2_h_d, numRowsSEMFEM * sizeof(pfloat));
+      o_bufz.copyFrom(SEMFEMBuffer2_h_d, numRowsSEMFEM);
 
     } else {
       auto boomerAMG = (hypreWrapperDevice::boomerAMG_t*) this->boomerAMG;

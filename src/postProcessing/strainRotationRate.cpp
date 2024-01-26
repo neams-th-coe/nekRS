@@ -3,13 +3,14 @@
 #include "linAlg.hpp"
 #include "postProcessing.hpp"
 
-void postProcessing::strainRotationRate(nrs_t *nrs, bool smooth, bool rotationRate, occa::memory& o_SO)
+void postProcessing::strainRotationRate(nrs_t *nrs, bool smooth, bool rotationRate, 
+                                        const occa::memory& o_U, occa::memory& o_SO)
 {
   mesh_t *mesh = nrs->meshV;
 
   const int nFields = (rotationRate) ? 2*nrs->NVfields + nrs->NVfields : 2*nrs->NVfields;
 
-  nrsCheck(o_SO.size() < (nFields*nrs->fieldOffset*sizeof(dfloat)),
+  nrsCheck(o_SO.length() < (nFields*nrs->fieldOffset),
            MPI_COMM_SELF, EXIT_FAILURE, "o_SO too small to store %d fields!\n", nFields); 
  
   nrs->SijOijKernel(mesh->Nelements,
@@ -18,7 +19,7 @@ void postProcessing::strainRotationRate(nrs_t *nrs, bool smooth, bool rotationRa
                     (int) smooth,
 		    mesh->o_vgeo,
 		    mesh->o_D,
-		    nrs->o_U,
+		    o_U,
 		    o_SO);
 
   if(smooth) { 
@@ -39,7 +40,8 @@ void postProcessing::strainRotationRate(nrs_t *nrs, bool smooth, bool rotationRa
   } 
 }
 
-void postProcessing::strainRate(nrs_t *nrs, bool smooth, occa::memory& o_S)
+void postProcessing::strainRate(nrs_t *nrs, bool smooth, 
+                                const occa::memory& o_U, occa::memory& o_S)
 {
-  strainRotationRate(nrs, smooth, false, o_S); 
+  strainRotationRate(nrs, smooth, false, o_U, o_S); 
 }

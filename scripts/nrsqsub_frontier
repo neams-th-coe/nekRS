@@ -94,6 +94,7 @@ echo "module load craype-accel-amd-gfx90a" >> $SFILE
 echo "module load cray-mpich" >> $SFILE
 echo "module load rocm" >> $SFILE
 echo "module unload cray-libsci" >> $SFILE
+echo "module unload darshan-runtime" $SFILE
 echo "module list" >> $SFILE
 
 echo "rocm-smi" >>$SFILE
@@ -118,6 +119,10 @@ echo "export MPICH_MPIIO_STATS=1" >>$SFILE
 
 echo "export MPICH_OFI_NIC_POLICY=NUMA" >>$SFILE
 echo "export NEKRS_CACHE_BCAST=$NEKRS_CACHE_BCAST" >> $SFILE
+
+echo "export FI_CXI_RX_MATCH_MODE=hybrid" >> $SFILE  
+
+echo "export PMI_MMAP_SYNC_WAIT_TIME=600" >> $SFILE
 
 echo "if [ \$NEKRS_CACHE_BCAST -eq 1 ]; then" >> $SFILE
 echo "  export NEKRS_LOCAL_TMP_DIR=\$NVME_HOME" >> $SFILE
@@ -144,6 +149,9 @@ echo "ldd $bin_nvme" >> $SFILE
 if [ $NEKRS_SKIP_BUILD_ONLY -eq 0 ]; then
 echo "# precompilation" >>$SFILE
 echo "srun -N 1 -n 1 $bin_nvme --backend $backend --device-id 0 --setup $case --build-only $ntasks" >>$SFILE
+echo "if [ \$? -ne 0 ]; then" >> $SFILE
+echo "  exit" >> $SFILE
+echo "fi" >> $SFILE
 fi
 echo "" >> $SFILE
 

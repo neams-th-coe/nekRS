@@ -5,6 +5,15 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
   platform_t *platform = platform_t::getInstance();
   device_t &device = platform->device;
 
+  // initialize vector entries
+  cds->mesh.resize(nrs->Nscalar);
+  cds->fieldOffset.resize(nrs->Nscalar);
+  cds->fieldOffsetScan.resize(nrs->Nscalar);
+  cds->solver.resize(nrs->Nscalar);
+  cds->compute.resize(nrs->Nscalar);
+  cds->cvodeSolve.resize(nrs->Nscalar);
+  cds->filterS.resize(nrs->Nscalar);
+
   cds->mesh[0] = nrs->_mesh;
   mesh_t *mesh = cds->mesh[0];
   cds->meshV = nrs->_mesh->fluid;
@@ -34,11 +43,11 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
     cds->fieldOffset[s] = cds->fieldOffset[0];
     cds->fieldOffsetScan[s] = sum;
     sum += cds->fieldOffset[s];
-    cds->mesh[s] = cds->mesh[0];
+    cds->mesh[s] = cds->meshV;
   }
   cds->fieldOffsetSum = sum;
 
-  cds->o_fieldOffsetScan = platform->device.malloc(cds->NSfields * sizeof(dlong), cds->fieldOffsetScan);
+  cds->o_fieldOffsetScan = platform->device.malloc<dlong>(cds->NSfields, cds->fieldOffsetScan.data());
 
   cds->gsh = nrs->gsh;
   cds->gshT = (nrs->cht) ? oogs::setup(mesh->ogs, 1, nrs->fieldOffset, ogsDfloat, NULL, OOGS_AUTO) : cds->gsh;
@@ -58,9 +67,9 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
 
   cds->dt = nrs->dt;
 
-  cds->o_prop = device.malloc(2 * cds->fieldOffsetSum * sizeof(dfloat));
-  cds->o_diff = cds->o_prop.slice(0 * cds->fieldOffsetSum * sizeof(dfloat));
-  cds->o_rho = cds->o_prop.slice(1 * cds->fieldOffsetSum * sizeof(dfloat));
+  cds->o_prop = device.malloc<dfloat>(2 * cds->fieldOffsetSum);
+  cds->o_diff = cds->o_prop.slice(0 * cds->fieldOffsetSum);
+  cds->o_rho = cds->o_prop.slice(1 * cds->fieldOffsetSum);
 
   for (int is = 0; is < cds->NSfields; is++) {
     const std::string sid = scalarDigitStr(is);
@@ -74,10 +83,10 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
     options.getArgs("SCALAR" + sid + " DIFFUSIVITY", diff);
     options.getArgs("SCALAR" + sid + " DENSITY", rho);
 
-    auto o_diff = cds->o_diff + cds->fieldOffsetScan[is] * sizeof(dfloat);
-    auto o_rho = cds->o_rho + cds->fieldOffsetScan[is] * sizeof(dfloat);
-    platform->linAlg->fill(mesh->Nlocal, diff, o_diff); 
-    platform->linAlg->fill(mesh->Nlocal, rho, o_rho); 
+    auto o_diff = cds->o_diff + cds->fieldOffsetScan[is];
+    auto o_rho = cds->o_rho + cds->fieldOffsetScan[is];
+    platform->linAlg->fill(mesh->Nlocal, diff, o_diff);
+    platform->linAlg->fill(mesh->Nlocal, rho, o_rho);
   }
 
   cds->o_ellipticCoeff = nrs->o_ellipticCoeff;
@@ -117,22 +126,22 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
       }
     }
   }
-  cds->o_EToB = device.malloc(cds->EToBOffset * cds->NSfields * sizeof(int), cds->EToB);
+  cds->o_EToB = device.malloc<int>(cds->EToBOffset * cds->NSfields, cds->EToB);
 
-  cds->o_compute = platform->device.malloc(cds->NSfields * sizeof(dlong), cds->compute);
-  cds->o_cvodeSolve = platform->device.malloc(cds->NSfields * sizeof(dlong), cds->cvodeSolve);
+  cds->o_compute = platform->device.malloc<dlong>(cds->NSfields, cds->compute.data());
+  cds->o_cvodeSolve = platform->device.malloc<dlong>(cds->NSfields, cds->cvodeSolve.data());
 
   cds->o_U = nrs->o_U;
   cds->o_Ue = nrs->o_Ue;
   int nFieldsAlloc = cds->anyEllipticSolver ? std::max(cds->nBDF, cds->nEXT) : 1;
-  cds->o_S = platform->device.malloc(nFieldsAlloc * cds->fieldOffsetSum * sizeof(dfloat), cds->S);
+  cds->o_S = platform->device.malloc<dfloat>(nFieldsAlloc * cds->fieldOffsetSum, cds->S);
 
   nFieldsAlloc = cds->anyEllipticSolver ? cds->nEXT : 1;
-  cds->o_FS = platform->device.malloc(nFieldsAlloc * cds->fieldOffsetSum * sizeof(dfloat));
+  cds->o_FS = platform->device.malloc<dfloat>(nFieldsAlloc * cds->fieldOffsetSum);
 
   if (cds->anyEllipticSolver) {
-    cds->o_Se = platform->device.malloc(cds->fieldOffsetSum, sizeof(dfloat));
-    cds->o_BF = platform->device.malloc(cds->fieldOffsetSum * sizeof(dfloat));
+    cds->o_Se = platform->device.malloc<dfloat>(cds->fieldOffsetSum);
+    cds->o_BF = platform->device.malloc<dfloat>(cds->fieldOffsetSum);
   }
 
   bool scalarFilteringEnabled = false;
@@ -160,9 +169,9 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
 
     std::vector<dlong> applyFilterRT(cds->NSfields, 0);
     const dlong Nmodes = cds->mesh[0]->N + 1;
-    cds->o_filterMT = platform->device.malloc(cds->NSfields * Nmodes * Nmodes, sizeof(dfloat));
-    cds->o_filterS = platform->device.malloc(cds->NSfields, sizeof(dfloat));
-    cds->o_applyFilterRT = platform->device.malloc(cds->NSfields, sizeof(dlong));
+    cds->o_filterRT = platform->device.malloc<dfloat>(cds->NSfields * Nmodes * Nmodes);
+    cds->o_filterS = platform->device.malloc<dfloat>(cds->NSfields);
+    cds->o_applyFilterRT = platform->device.malloc<dlong>(cds->NSfields);
     for (int is = 0; is < cds->NSfields; is++) {
       std::string sid = scalarDigitStr(is);
 
@@ -181,17 +190,15 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
         filterS = -1.0 * fabs(filterS);
         cds->filterS[is] = filterS;
 
-        cds->o_filterMT.copyFrom(hpfSetup(cds->mesh[is], filterNc),
-                                 Nmodes * Nmodes * sizeof(dfloat),
-                                 is * Nmodes * Nmodes * sizeof(dfloat));
+        cds->o_filterRT.copyFrom(lowPassFilter(cds->mesh[is], filterNc), Nmodes * Nmodes, is * Nmodes * Nmodes);
 
         applyFilterRT[is] = 1;
         cds->applyFilter = 1;
       }
     }
 
-    cds->o_filterS.copyFrom(cds->filterS, cds->NSfields * sizeof(dfloat));
-    cds->o_applyFilterRT.copyFrom(applyFilterRT.data(), cds->NSfields * sizeof(dlong));
+    cds->o_filterS.copyFrom(cds->filterS.data(), cds->NSfields);
+    cds->o_applyFilterRT.copyFrom(applyFilterRT.data(), cds->NSfields);
 
     if (avmEnabled) {
       avm::setup(cds);
@@ -204,8 +211,10 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
     kernelName = "strongAdvectionVolume" + suffix;
     cds->strongAdvectionVolumeKernel = platform->kernels.get(section + kernelName);
 
-    kernelName = "strongAdvectionCubatureVolume" + suffix;
-    cds->strongAdvectionCubatureVolumeKernel = platform->kernels.get(section + kernelName);
+    if (platform->options.compareArgs("ADVECTION TYPE", "CUBATURE")) {
+      kernelName = "strongAdvectionCubatureVolume" + suffix;
+      cds->strongAdvectionCubatureVolumeKernel = platform->kernels.get(section + kernelName);
+    }
 
     kernelName = "advectMeshVelocity" + suffix;
     cds->advectMeshVelocityKernel = platform->kernels.get(section + kernelName);
@@ -230,9 +239,6 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
     kernelName = "filterRT" + suffix;
     cds->filterRTKernel = platform->kernels.get(section + kernelName);
 
-    kernelName = "nStagesSum3";
-    cds->nStagesSum3Kernel = platform->kernels.get(section + kernelName);
-
     if (cds->Nsubsteps) {
       if (platform->options.compareArgs("ADVECTION TYPE", "CUBATURE")) {
         kernelName = "subCycleStrongCubatureVolume" + suffix;
@@ -240,14 +246,6 @@ cds_t *cdsSetup(nrs_t *nrs, setupAide options)
       }
       kernelName = "subCycleStrongVolume" + suffix;
       cds->subCycleStrongVolumeKernel = platform->kernels.get(section + kernelName);
-
-      kernelName = "subCycleRKUpdate";
-      cds->subCycleRKUpdateKernel = platform->kernels.get(section + kernelName);
-      kernelName = "subCycleRK";
-      cds->subCycleRKKernel = platform->kernels.get(section + kernelName);
-
-      kernelName = "subCycleInitU0";
-      cds->subCycleInitU0Kernel = platform->kernels.get(section + kernelName);
     }
   }
 

@@ -82,10 +82,9 @@ void timer_t::set(const std::string tag, double time, long long int count)
 {
   m_[tag].startTime = time;
   auto it = m_.find(tag);
-  if (it == m_.end()) {
-    printf("Error in set: Invalid tag name %s\n", tag.c_str());
-    MPI_Abort(comm_, 1);
-  }
+
+  nrsCheck(it == m_.end(), MPI_COMM_SELF, EXIT_FAILURE, 
+           "Invalid tag name %s\n", tag.c_str());
 
   it->second.hostElapsed = time;
   it->second.deviceElapsed = it->second.hostElapsed;
@@ -120,10 +119,12 @@ void timer_t::disableSync() { enable_sync_ = 0; }
 void timer_t::reset(const std::string tag)
 {
   std::map<std::string, tagData>::iterator it = m_.find(tag);
-  it->second.startTime = 0;
-  it->second.hostElapsed = 0;
-  it->second.deviceElapsed = 0;
-  it->second.count = 0;
+  if(it != m_.end()) {
+    it->second.startTime = 0;
+    it->second.hostElapsed = 0;
+    it->second.deviceElapsed = 0;
+    it->second.count = 0;
+  }
 }
 
 void timer_t::finalize() { reset(); }
@@ -153,10 +154,8 @@ void timer_t::deviceToc(const std::string tag)
   occa::streamTag stopTag = device_.tagStream();
 
   std::map<std::string, tagData>::iterator it = m_.find(tag);
-  if (it == m_.end()) {
-    printf("Error in deviceToc: Invalid tag name %s\n", tag.c_str());
-    MPI_Abort(comm_, 1);
-  }
+  nrsCheck(it == m_.end(), MPI_COMM_SELF, EXIT_FAILURE,
+           "Invalid tag name %s\n", tag.c_str());
 
   it->second.deviceElapsed += device_.timeBetween(it->second.startTag, stopTag);
   it->second.count++;
@@ -187,10 +186,8 @@ void timer_t::hostToc(const std::string tag)
   double stopTime = MPI_Wtime();
 
   auto it = m_.find(tag);
-  if (it == m_.end()) {
-    printf("Error in deviceToc: Invalid tag name %s\n", tag.c_str());
-    MPI_Abort(comm_, 1);
-  }
+  nrsCheck(it == m_.end(), MPI_COMM_SELF, EXIT_FAILURE,
+           "Invalid tag name %s\n", tag.c_str());
 
   it->second.hostElapsed += (stopTime - it->second.startTime);
   it->second.count++;
@@ -224,10 +221,8 @@ void timer_t::toc(const std::string tag)
   auto stopTag = device_.tagStream();
 
   auto it = m_.find(tag);
-  if (it == m_.end()) {
-    printf("Error in deviceToc: Invalid tag name %s\n", tag.c_str());
-    MPI_Abort(comm_, 1);
-  }
+  nrsCheck(it == m_.end(), MPI_COMM_SELF, EXIT_FAILURE,
+           "Invalid tag name %s\n", tag.c_str());
 
   it->second.hostElapsed += (stopTime - it->second.startTime);
   it->second.deviceElapsed += device_.timeBetween(it->second.startTag, stopTag);
@@ -420,9 +415,15 @@ void timer_t::printRunStat(int step)
 
   const double tMinSolveStep = query("minSolveStep", "DEVICE:MAX");
   const double tMaxSolveStep = query("maxSolveStep", "DEVICE:MAX");
+
+  const double tScalarCvode = query("cvode_t::solve", "DEVICE:MAX");
+
+  bool printFlops = !platform->options.compareArgs("PRESSURE PRECONDITIONER", "SEMFEM") && 
+                    tScalarCvode < 0;
+
   const double flops =
       platform->flopCounter->get(platform->comm.mpiComm) / (tElapsedTimeSolve * platform->comm.mpiCommSize);
-  bool printFlops = !platform->options.compareArgs("PRESSURE PRECONDITIONER", "SEMFEM");
+
 
   printStatEntry("  solve                 ", tElapsedTimeSolve, tElapsedTimeSolve);
   if (tElapsedTimeSolve > 0 && rank == 0) {
@@ -472,7 +473,6 @@ void timer_t::printRunStat(int step)
   
   const double tDiv = query("udfDiv", "DEVICE:MAX");
   printStatEntry("    udfDiv              ", "udfDiv", "DEVICE:MAX", tElapsedTimeSolve);
-  printStatEntry("      udfSEqnSource     ", "udfDiv::udfSEqnSource", "DEVICE:MAX", tDiv);
 
   const double tMakef = query("makef", "DEVICE:MAX");
   printStatEntry("    makef               ", "makef", "DEVICE:MAX", tElapsedTimeSolve);
@@ -535,7 +535,6 @@ void timer_t::printRunStat(int step)
   printStatEntry("    scalarSolve         ", "scalarSolve", "DEVICE:MAX", tElapsedTimeSolve);
   printStatEntry("      rhs               ", "scalar rhs", "DEVICE:MAX", tScalar);
   
-  const double tScalarCvode = query("cvode_t::solve", "DEVICE:MAX");
 
   auto cvodeMakeQPredicate = [](const std::string &tag) {
     bool match = tag.find("cvode_t::") != std::string::npos && tag.find("makeq") != std::string::npos;
@@ -551,6 +550,13 @@ void timer_t::printRunStat(int step)
   };
   auto [tSEqnSourceCvode, nSEqnSourceCvode] = sumAllMatchingTags(cvodeUdfSEqnSourcePredicate, "DEVICE:MAX");
   
+  auto cvodeLocalPointSourcePredicate = [](const std::string &tag) {
+    bool match = tag.find("cvode_t::") != std::string::npos && tag.find("pointSource") != std::string::npos;
+    // ensure children of the timer aren't doubly counted
+    return match;
+  };
+  auto [tLocalPointSource, nLocalPointSource] = sumAllMatchingTags(cvodeLocalPointSourcePredicate, "DEVICE:MAX");
+  
   auto cvodePropertiesPredicate = [](const std::string &tag) {
     bool match = tag.find("cvode_t::") != std::string::npos && tag.find("evaluateProperties") != std::string::npos;
     // ensure children of the timer aren't doubly counted
@@ -560,6 +566,7 @@ void timer_t::printRunStat(int step)
   printStatEntry("    scalarSolveCvode    ", "cvode_t::solve", "DEVICE:MAX", tElapsedTimeSolve);
   printStatEntry("      makeq             ", tMakeqCvode, nMakeqCvode, tScalarCvode);
   printStatEntry("        udfSEqnSource   ", tSEqnSourceCvode, nSEqnSourceCvode, tMakeqCvode);
+  printStatEntry("      local pt src      ", tLocalPointSource, nLocalPointSource, tScalarCvode);
   printStatEntry("      udfProperties     ", tPropCvode, nPropCvode, tScalarCvode);
 
   auto precoTimeScalars = 0.0;

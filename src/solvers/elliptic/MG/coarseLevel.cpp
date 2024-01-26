@@ -70,9 +70,12 @@ void MGSolver_t::coarseLevel_t::setupSolver(
   if (!vectorDotStarKernel.isInitialized()) 
     vectorDotStarKernel = platform->kernels.get(kernelName);
 
-  o_xBuffer = platform->device.malloc(N * sizeof(pfloat));
-  h_xBuffer = platform->device.mallocHost(N * sizeof(pfloat));
+  o_xBuffer = platform->device.malloc<pfloat>(N);
+  h_xBuffer = platform->device.mallocHost<pfloat>(N);
   xBuffer = (pfloat*) h_xBuffer.ptr(); 
+
+  std::vector<double> Av(nnz);
+  for(int i = 0; i < Av.size(); i++) Av[i] = Avals[i]; 
 
   if (options.compareArgs("COARSE SOLVER", "BOOMERAMG")){
  
@@ -91,6 +94,7 @@ void MGSolver_t::coarseLevel_t::setupSolver(
     settings[9]  = 0.05; /* non galerkin tol             */
     settings[10] = 0;    /* aggressive coarsening levels */
     settings[11] = 1;    /* chebyRelaxOrder */
+    settings[12] = 0.3;  /* chebyRelaxOrder */
 
     platform->options.getArgs("BOOMERAMG COARSEN TYPE", settings[1]);
     platform->options.getArgs("BOOMERAMG INTERPOLATION TYPE", settings[2]);
@@ -102,6 +106,7 @@ void MGSolver_t::coarseLevel_t::setupSolver(
     platform->options.getArgs("BOOMERAMG NONGALERKIN TOLERANCE" , settings[9]);
     platform->options.getArgs("BOOMERAMG AGGRESSIVE COARSENING LEVELS" , settings[10]);
     platform->options.getArgs("BOOMERAMG CHEBYSHEV RELAX ORDER" , settings[11]);
+    platform->options.getArgs("BOOMERAMG CHEBYSHEV FRACTION" , settings[12]);
 
     if(useDevice) {
       boomerAMG = new hypreWrapperDevice::boomerAMG_t(
@@ -109,7 +114,7 @@ void MGSolver_t::coarseLevel_t::setupSolver(
         nnz,
         Ai,
         Aj,
-        Avals,
+        Av.data(),
         (int) nullSpace,
         comm,
         platform->device.occaDevice(),
@@ -123,7 +128,7 @@ void MGSolver_t::coarseLevel_t::setupSolver(
         nnz,
         Ai,
         Aj,
-        Avals,
+        Av.data(),
         (int) nullSpace,
         comm,
         Nthreads,
@@ -134,7 +139,7 @@ void MGSolver_t::coarseLevel_t::setupSolver(
   }
   else if (options.compareArgs("COARSE SOLVER", "AMGX")){
     std::string configFile;
-    options.getArgs("AMGX CONFIG FILE", configFile);
+    platform->options.getArgs("AMGX CONFIG FILE", configFile);
     char *cfg = NULL;
     if(configFile.size()) cfg = (char*) configFile.c_str();
     AMGX = new AMGX_t(
@@ -142,7 +147,7 @@ void MGSolver_t::coarseLevel_t::setupSolver(
       nnz,
       Ai,
       Aj,
-      Avals,
+      Av.data(),
       (int) nullSpace,
       comm,
       platform->device.id(),
@@ -188,13 +193,13 @@ void MGSolver_t::coarseLevel_t::solve(occa::memory& o_rhs, occa::memory& o_x)
 
     const pfloat zero = 0.0;
     platform->linAlg->pfill(N, zero, o_xBuffer);
-    if(!useDevice) o_xBuffer.copyTo(xBuffer, N*sizeof(pfloat));
+    if(!useDevice) o_xBuffer.copyTo(xBuffer, N);
 
     // E->T
     const pfloat one = 1.0;
     vectorDotStarKernel(ogs->N, one, zero, o_weight, o_rhs, o_Sx); 
     ogsGather(o_Gx, o_Sx, ogsPfloat, ogsAdd, ogs);
-    if(!useDevice) o_Gx.copyTo(Gx, N*sizeof(pfloat));
+    if(!useDevice) o_Gx.copyTo(Gx, N);
 
     if (options.compareArgs("COARSE SOLVER", "BOOMERAMG")){
       if(useDevice) {
@@ -212,7 +217,7 @@ void MGSolver_t::coarseLevel_t::solve(occa::memory& o_rhs, occa::memory& o_x)
     if(useDevice) {
       ogsScatter(o_x, o_xBuffer, ogsPfloat, ogsAdd, ogs);
     } else {
-      o_Gx.copyFrom(xBuffer, N*sizeof(pfloat));
+      o_Gx.copyFrom(xBuffer, N);
       ogsScatter(o_x, o_Gx, ogsPfloat, ogsAdd, ogs);
     }
 

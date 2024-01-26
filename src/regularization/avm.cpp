@@ -6,7 +6,7 @@
 #include "cds.hpp"
 #include "avm.hpp"
 #include "udf.hpp"
-#include "hpf.hpp"
+#include "lowPassFilter.hpp"
 
 /**
  * Persson's artificial viscosity method (http://persson.berkeley.edu/pub/persson06shock.pdf) with P1
@@ -24,7 +24,7 @@ static occa::memory o_r;
 static occa::memory o_s;
 static occa::memory o_t;
 static std::vector<occa::memory> o_diff0;
-static std::vector<occa::memory> o_filterMT;
+static std::vector<occa::memory> o_filterRT;
 
 static double cachedDt = -1.0;
 static bool recomputeUrst = false;
@@ -51,28 +51,25 @@ void setup(cds_t *cds)
                "AVM requires polynomialOrder >= 5!");
 
       if (udf.properties == nullptr) {
-        o_diff0.push_back(platform->device.malloc(cds->fieldOffset[is], sizeof(dfloat)));
-        o_diff0[is].copyFrom(cds->o_diff,
-                             cds->fieldOffset[is] * sizeof(dfloat),
-                             0,
-                             cds->fieldOffsetScan[is] * sizeof(dfloat));
+        o_diff0.push_back(platform->device.malloc<dfloat>(cds->fieldOffset[is]));
+        o_diff0[is].copyFrom(cds->o_diff, cds->fieldOffset[is], 0, cds->fieldOffsetScan[is]);
       }
 
       int filterNc = -1;
       platform->options.getArgs("SCALAR" + sid + " REGULARIZATION HPF MODES", filterNc);
-      o_filterMT.push_back(hpfSetup(cds->mesh[is], filterNc));
+      o_filterRT.push_back(lowPassFilter(cds->mesh[is], filterNc));
     } else {
-      o_filterMT.push_back(o_NULL);
+      o_filterRT.push_back(o_NULL);
       if (udf.properties == nullptr) {
         o_diff0.push_back(o_NULL);
       }
     }
   }
 
-  o_vertexIds = platform->device.malloc(mesh->Nverts * sizeof(int), mesh->vertexNodes);
-  o_r = platform->device.malloc(mesh->Np * sizeof(dfloat), mesh->r);
-  o_s = platform->device.malloc(mesh->Np * sizeof(dfloat), mesh->s);
-  o_t = platform->device.malloc(mesh->Np * sizeof(dfloat), mesh->t);
+  o_vertexIds = platform->device.malloc<int>(mesh->Nverts, mesh->vertexNodes);
+  o_r = platform->device.malloc<dfloat>(mesh->Np, mesh->r);
+  o_s = platform->device.malloc<dfloat>(mesh->Np, mesh->s);
+  o_t = platform->device.malloc<dfloat>(mesh->Np, mesh->t);
 
   std::string kernelName;
 
@@ -86,12 +83,11 @@ void setup(cds_t *cds)
   interpolateP1Kernel = platform->kernels.get(kernelName);
 }
 
-occa::memory computeEps(nrs_t *nrs, const dfloat time, const dlong scalarIndex, occa::memory o_S)
+occa::memory computeEps(nrs_t *nrs, const double time, const dlong scalarIndex, occa::memory o_S)
 {
   cds_t *cds = nrs->cds;
 
-  const dfloat TOL = 1e-10;
-  if (std::abs(cachedDt - time) > TOL) {
+  if (std::abs(time - cachedDt) / time > 10 * std::numeric_limits<dfloat>::epsilon()) {
     recomputeUrst = true;
   }
 
@@ -99,11 +95,11 @@ occa::memory computeEps(nrs_t *nrs, const dfloat time, const dlong scalarIndex, 
 
   mesh_t *mesh = cds->mesh[scalarIndex];
 
-  occa::memory &o_logRelativeMassHighestMode = platform->o_mempool.slice0;
-  occa::memory &o_filteredField = platform->o_mempool.slice1;
-  occa::memory &o_hpfResidual = platform->o_mempool.slice2;
-  occa::memory &o_epsilon = platform->o_mempool.slice5;
-  occa::memory &o_aliasedUrst = platform->o_mempool.slice6;
+  occa::memory o_logRelativeMassHighestMode =
+      platform->o_memPool.reserve<dfloat>(cds->fieldOffset[scalarIndex]);
+  occa::memory o_filteredField = platform->o_memPool.reserve<dfloat>(cds->fieldOffset[scalarIndex]);
+  occa::memory o_hpfResidual = platform->o_memPool.reserve<dfloat>(cds->fieldOffset[scalarIndex]);
+  occa::memory o_epsilon = platform->o_memPool.reserve<dfloat>(cds->fieldOffset[scalarIndex]);
 
   // artificial viscosity magnitude
   platform->linAlg->fill(cds->fieldOffset[scalarIndex], 0.0, o_epsilon);
@@ -111,7 +107,7 @@ occa::memory computeEps(nrs_t *nrs, const dfloat time, const dlong scalarIndex, 
   relativeMassHighestModeKernel(mesh->Nelements,
                                 scalarIndex,
                                 cds->fieldOffsetScan[scalarIndex],
-                                o_filterMT[scalarIndex],
+                                o_filterRT[scalarIndex],
                                 mesh->o_LMM,
                                 o_S,
                                 o_filteredField,
@@ -124,9 +120,7 @@ occa::memory computeEps(nrs_t *nrs, const dfloat time, const dlong scalarIndex, 
 
   dfloat Uinf = 1.0;
   if (useHPFResidual) {
-
-    occa::memory o_rhoField = cds->o_rho + cds->fieldOffsetScan[scalarIndex] * sizeof(dfloat);
-
+    occa::memory o_aliasedUrst = platform->o_memPool.reserve<dfloat>(cds->NVfields * cds->vFieldOffset);
     if (recomputeUrst) {
       nrs->UrstKernel(cds->meshV->Nelements,
                       cds->meshV->o_vgeo,
@@ -137,19 +131,20 @@ occa::memory computeEps(nrs_t *nrs, const dfloat time, const dlong scalarIndex, 
       recomputeUrst = false;
     }
 
+    occa::memory o_rhoField = cds->o_rho + cds->fieldOffsetScan[scalarIndex];
     cds->strongAdvectionVolumeKernel(cds->meshV->Nelements,
                                      1,
                                      cds->meshV->o_vgeo,
                                      mesh->o_D,
-                                     cds->o_compute + scalarIndex * sizeof(dlong),
-                                     cds->o_fieldOffsetScan + scalarIndex * sizeof(dlong),
+                                     cds->o_compute + scalarIndex,
+                                     cds->o_fieldOffsetScan + scalarIndex,
                                      cds->vFieldOffset,
                                      o_filteredField,
                                      o_aliasedUrst,
                                      o_rhoField,
                                      o_hpfResidual);
 
-    occa::memory o_S_field = o_S + cds->fieldOffsetScan[scalarIndex] * sizeof(dfloat);
+    occa::memory o_S_field = o_S + cds->fieldOffsetScan[scalarIndex];
 
     const dfloat Uavg =
         platform->linAlg->weightedNorm2(mesh->Nlocal, mesh->o_LMM, o_S_field, platform->comm.mpiComm) /
@@ -211,7 +206,7 @@ occa::memory computeEps(nrs_t *nrs, const dfloat time, const dlong scalarIndex, 
   return o_epsilon;
 }
 
-void apply(nrs_t *nrs, const dfloat time, const dlong scalarIndex, occa::memory o_S)
+void apply(nrs_t *nrs, const double time, const dlong scalarIndex, occa::memory o_S)
 {
   cds_t *cds = nrs->cds;
   const int verbose = platform->options.compareArgs("VERBOSE", "TRUE");
@@ -220,8 +215,8 @@ void apply(nrs_t *nrs, const dfloat time, const dlong scalarIndex, occa::memory 
   // restore inital viscosity
   if (udf.properties == nullptr) {
     cds->o_diff.copyFrom(o_diff0[scalarIndex],
-                         cds->fieldOffset[scalarIndex] * sizeof(dfloat),
-                         cds->fieldOffsetScan[scalarIndex] * sizeof(dfloat));
+                         cds->fieldOffset[scalarIndex],
+                         cds->fieldOffsetScan[scalarIndex]);
   }
 
   occa::memory o_eps = computeEps(nrs, time, scalarIndex, o_S);
@@ -229,7 +224,7 @@ void apply(nrs_t *nrs, const dfloat time, const dlong scalarIndex, occa::memory 
   if (verbose) {
     const dfloat maxEps = platform->linAlg->max(mesh->Nlocal, o_eps, platform->comm.mpiComm);
     const dfloat minEps = platform->linAlg->min(mesh->Nlocal, o_eps, platform->comm.mpiComm);
-    occa::memory o_S_slice = cds->o_diff + cds->fieldOffsetScan[scalarIndex] * sizeof(dfloat);
+    occa::memory o_S_slice = cds->o_diff + cds->fieldOffsetScan[scalarIndex];
     const dfloat maxDiff = platform->linAlg->max(mesh->Nlocal, o_S_slice, platform->comm.mpiComm);
     const dfloat minDiff = platform->linAlg->min(mesh->Nlocal, o_S_slice, platform->comm.mpiComm);
 
@@ -247,7 +242,7 @@ void apply(nrs_t *nrs, const dfloat time, const dlong scalarIndex, occa::memory 
   platform->linAlg->axpby(mesh->Nlocal, 1.0, o_eps, 1.0, cds->o_diff, 0, cds->fieldOffsetScan[scalarIndex]);
 
   if (verbose) {
-    occa::memory o_S_slice = cds->o_diff + cds->fieldOffsetScan[scalarIndex] * sizeof(dfloat);
+    occa::memory o_S_slice = cds->o_diff + cds->fieldOffsetScan[scalarIndex];
     const dfloat maxDiff = platform->linAlg->max(mesh->Nlocal, o_S_slice, platform->comm.mpiComm);
     const dfloat minDiff = platform->linAlg->min(mesh->Nlocal, o_S_slice, platform->comm.mpiComm);
 

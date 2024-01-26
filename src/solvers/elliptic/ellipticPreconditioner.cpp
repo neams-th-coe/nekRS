@@ -30,7 +30,7 @@
 #include "platform.hpp"
 #include "linAlg.hpp"
 
-void ellipticPreconditioner(elliptic_t *elliptic, occa::memory &o_r, occa::memory &o_z)
+void ellipticPreconditioner(elliptic_t *elliptic, const occa::memory &o_r, occa::memory &o_z)
 {
   mesh_t *mesh = elliptic->mesh;
   precon_t *precon = elliptic->precon;
@@ -67,7 +67,7 @@ void ellipticPreconditioner(elliptic_t *elliptic, occa::memory &o_r, occa::memor
     platform->copyPfloatToDfloatKernel(elliptic->fieldOffset * elliptic->Nfields, o_zPfloat, o_z);
   }
   else if (options.compareArgs("PRECONDITIONER", "NONE")) {
-    o_z.copyFrom(o_r, elliptic->fieldOffset * elliptic->Nfields * sizeof(dfloat));
+    o_z.copyFrom(o_r, elliptic->fieldOffset * elliptic->Nfields);
   }
   else if (options.compareArgs("PRECONDITIONER", "USER")) {
     elliptic->userPreconditioner(o_r, o_z);

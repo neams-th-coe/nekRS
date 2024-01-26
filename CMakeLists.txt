@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(NekRS LANGUAGES C CXX Fortran VERSION 23.0.7)
+project(NekRS LANGUAGES C CXX Fortran VERSION 23.1.1)
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
@@ -8,7 +8,7 @@ if(${CMAKE_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-  set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local/nekrs" CACHE PATH "installation directory" FORCE) 
+  set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local/nekrs" CACHE PATH "installation directory" FORCE)
 endif()
 
 if(${CMAKE_INSTALL_PREFIX} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
@@ -22,6 +22,9 @@ include(ExternalProject)
 include(FetchContent)
 include(config/utils.cmake)
 
+
+set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 #set(CMAKE_INSTALL_MESSAGE NEVER)
 set(CMAKE_INSTALL_MESSAGE ALWAYS)
@@ -32,7 +35,7 @@ set(CMAKE_ENABLE_EXPORTS TRUE)
 set(CMAKE_INSTALL_LIBDIR ${CMAKE_INSTALL_PREFIX}/lib)
 set(BUILD_SHARED_LIBS OFF)
 
-if (NOT CMAKE_CONFIGURATION_TYPES AND 
+if (NOT CMAKE_CONFIGURATION_TYPES AND
     NOT CMAKE_NO_BUILD_TYPE AND
     NOT CMAKE_BUILD_TYPE AND
     CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -74,9 +77,9 @@ endif()
 ###############################################################################
 # Configure Options
 ###############################################################################
-set(NEK5000_PPLIST "PARRSB DPROCMAP" CACHE STRING 
+set(NEK5000_PPLIST "PARRSB DPROCMAP" CACHE STRING
   "Preprocessor macros for Nek5000")
-set(NEKINTERFACEDIR "${CMAKE_CURRENT_SOURCE_DIR}/src/nekInterface/" CACHE PATH 
+set(NEKINTERFACEDIR "${CMAKE_CURRENT_SOURCE_DIR}/src/nekInterface/" CACHE PATH
 "Directory for Nek5000 inteface source files")
 
 string(COMPARE EQUAL "${CMAKE_CXX_COMPILER_ID}" "GNU" USING_GNU)
@@ -87,18 +90,23 @@ string(COMPARE EQUAL "${CMAKE_CXX_COMPILER_ID}" "AppleClang" USING_APPLE_LLVM)
 string(COMPARE EQUAL "${CMAKE_CXX_COMPILER_ID}" "NVHPC" USING_NVHPC)
 
 if(USING_GNU OR USING_LLVM OR USING_APPLE_LLVM)
-  set(NEKRS_COMPILER_FLAGS "-O2 -g -march=native -mtune=native -ftree-vectorize" CACHE STRING "compiler flags")
+  set(NEKRS_COMPILER_DEFAULT_FLAGS "-O2 -g -march=native -mtune=native -ftree-vectorize")
   if (USING_GNU AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.1)
     message(FATAL_ERROR "GNU compiler version must be at least 9.1!")
   endif()
 elseif(USING_NVHPC)
-  set(NEKRS_COMPILER_FLAGS "-O2 -g -fast" CACHE STRING "compiler flags")
+  set(NEKRS_COMPILER_DEFAULT_FLAGS "-O2 -g -fast")
 else()
-  set(NEKRS_COMPILER_FLAGS "-O2 -g" CACHE STRING "compiler flags")
+  set(NEKRS_COMPILER_DEFAULT_FLAGS "-O2 -g")
 endif()
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO ${NEKRS_COMPILER_FLAGS})
-set(CMAKE_C_FLAGS_RELWITHDEBINFO ${NEKRS_COMPILER_FLAGS})
-set(CMAKE_Fortran_FLAGS_RELWITHDEBINFO ${NEKRS_COMPILER_FLAGS})
+
+set(NEKRS_CXX_FLAGS "${NEKRS_COMPILER_DEFAULT_FLAGS}" CACHE STRING "C++ compiler flags")
+set(NEKRS_C_FLAGS "${NEKRS_COMPILER_DEFAULT_FLAGS}" CACHE STRING "C compiler flags")
+set(NEKRS_Fortran_FLAGS "${NEKRS_COMPILER_DEFAULT_FLAGS}" CACHE STRING "Fortran compiler flags")
+
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO ${NEKRS_CXX_FLAGS})
+set(CMAKE_C_FLAGS_RELWITHDEBINFO ${NEKRS_C_FLAGS})
+set(CMAKE_Fortran_FLAGS_RELWITHDEBINFO ${NEKRS_Fortran_FLAGS})
 
 set(OCCA_CXX "${MPI_UNDERLYING_COMPILER}" CACHE STRING "C++ compiler for OCCA JIT compile")
 if(USING_INTEL_LLVM)
@@ -121,7 +129,11 @@ set(OCCA_OPENCL_COMPILER_FLAGS "-w -cl-std=CL2.0 -cl-unsafe-math-optimizations -
 
 set(OCCA_FOUND ON)
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64le")
+if(USING_APPLE_LLVM AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+  message(FATAL_ERROR "Apple Clang compiler not supported on arm64!")
+endif()
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64le" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
   string(REPLACE "-march" "-mcpu" OCCA_CXXFLAGS ${OCCA_CXXFLAGS})
   string(REPLACE "-march" "-mcpu" CMAKE_Fortran_FLAGS_RELWITHDEBINFO ${CMAKE_Fortran_FLAGS_RELWITHDEBINFO})
   string(REPLACE "-march" "-mcpu" CMAKE_C_FLAGS_RELWITHDEBINFO ${CMAKE_C_FLAGS_RELWITHDEBINFO})
@@ -138,6 +150,8 @@ set(ENABLE_AMGX OFF CACHE BOOL "Enable NVIDIA AMGX support")
 set(ENABLE_HYPRE_GPU OFF CACHE BOOL "Enable HYPRE GPU support")
 set(NEKRS_GPU_MPI ON CACHE BOOL "Enable GPU aware MPI")
 set(ENABLE_CVODE OFF CACHE BOOL "Enable CVODE support")
+
+set(NEKRS_BUILD_FLOAT ON CACHE BOOL "Build dfloat = float version")
 
 ###############################################################################
 # Set compiler flags                                                          #
@@ -166,7 +180,7 @@ function(set_external_flags lang)
   get_directory_property(compile_defs
           DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" COMPILE_DEFINITIONS )
   foreach(def "${compile_defs}")
-  
+
     if ("${def}" STREQUAL "")
       set(ext_flags "${ext_flags}")
     else ()
@@ -181,7 +195,6 @@ set_external_flags("C")
 set_external_flags("CXX")
 set_external_flags("Fortran")
 
-# Added as a patch given delays with updating 'next'
 set(BSYMBOLIC_FLAG1 "${CMAKE_C_LINKER_WRAPPER_FLAG}-Bsymbolic")
 check_linker_flag(C ${BSYMBOLIC_FLAG1} Allowed_LD_Flag_BSYMBOLIC)
 if(NOT Allowed_LD_Flag_BSYMBOLIC OR APPLE)
@@ -196,13 +209,6 @@ endif()
 
 set(BSYMBOLIC_FLAG "${BSYMBOLIC_FLAG1} ${BSYMBOLIC_FLAG2}")
 message("-- BSYMBOLIC_FLAG: ${BSYMBOLIC_FLAG}")
-# End patch
-# original code:
-# set(BSYMBOLIC_FLAG "LINKER:-Bsymbolic LINKER:-Bsymbolic-functions")
-# check_linker_flag(C ${BSYMBOLIC_FLAG} Allowed_LD_Flag_BSYMBOLIC)
-# if(NOT Allowed_LD_Flag_BSYMBOLIC OR APPLE)
-#   set(BSYMBOLIC_FLAG "")
-# endif()
 
 ################################################################################
 
@@ -244,7 +250,7 @@ endforeach()
 
 # cvode
 if (ENABLE_CVODE)
-  # workaround to resolve name conflict (used be OCCA and CVODE) 
+  # workaround to resolve name conflict (used be OCCA and CVODE)
   set(ENABLE_CUDA ${OCCA_CUDA_ENABLED})
   set(ENABLE_HIP ${OCCA_HIP_ENABLED})
   set(ENABLE_OPENCL ${OCCA_OPENCL_ENABLED})
@@ -267,16 +273,16 @@ if (ENABLE_CVODE)
   set(BUILD_IDAS OFF)
   set(BUILD_KINSOL OFF)
   set(EXAMPLES_ENABLE_C OFF)
-  set(EXAMPLES_ENABLE_CXX OFF) 
-  if(OCCA_CUDA_ENABLED) 
+  set(EXAMPLES_ENABLE_CXX OFF)
+  if(OCCA_CUDA_ENABLED)
     set(EXAMPLES_ENABLE_CUDA OFF)
-  endif() 
+  endif()
   set(EXAMPLES_ENABLE_F2003 OFF)
   set(BUILD_TESTING OFF)
   set(BUILD_SHARED_LIBS ON)
 
   add_subdirectory(3rd_party/cvode)
- 
+
   # restore default
   set(BUILD_SHARED_LIBS OFF)
 endif()
@@ -290,16 +296,28 @@ include(config/nek5000.cmake)
 # nrs
 include(config/nrs.cmake)
 
-# Link dependencies 
+# Link dependencies
 target_link_libraries(nekrs-lib PUBLIC libocca PRIVATE nekrs-hypre nekrs-hypre-device gs ${GSLIB} blas lapack ${CMAKE_DL_LIBS})
+if (NEKRS_BUILD_FLOAT)
+  target_link_libraries(nekrs-lib-fp32 PUBLIC libocca PRIVATE nekrs-hypre nekrs-hypre-device gs ${GSLIB} blas lapack ${CMAKE_DL_LIBS})
+endif()
+
 if(OpenMP_FOUND)
-target_link_libraries(nekrs-lib PUBLIC OpenMP::OpenMP_CXX)
+  target_link_libraries(nekrs-lib PUBLIC OpenMP::OpenMP_CXX)
+  if (NEKRS_BUILD_FLOAT)
+    target_link_libraries(nekrs-lib-fp32 PUBLIC OpenMP::OpenMP_CXX)
+  endif()
 endif()
 
 if(ENABLE_AMGX AND OCCA_CUDA_ENABLED)
   target_compile_definitions(nekrs-lib PUBLIC -DENABLE_AMGX)
   target_link_libraries(nekrs-lib PUBLIC amgxsh amgx)
   target_include_directories(nekrs-lib PUBLIC 3rd_party/AMGX/base/include 3rd_party/AMGX/core/include)
+  if (NEKRS_BUILD_FLOAT)
+    target_compile_definitions(nekrs-lib-fp32 PUBLIC -DENABLE_AMGX)
+    target_link_libraries(nekrs-lib-fp32 PUBLIC amgxsh amgx)
+    target_include_directories(nekrs-lib-fp32 PUBLIC 3rd_party/AMGX/base/include 3rd_party/AMGX/core/include)
+  endif()
 endif()
 
 if (ENABLE_CVODE)
@@ -315,6 +333,9 @@ if (ENABLE_CVODE)
 endif()
 
 target_link_libraries(nekrs-bin PRIVATE nekrs-lib)
+if (NEKRS_BUILD_FLOAT)
+  target_link_libraries(nekrs-bin-fp32 PRIVATE nekrs-lib-fp32)
+endif()
 
 ###############################################################################
 # install
@@ -332,7 +353,7 @@ elseif(OCCA_OPENCL_ENABLED)
 else()
   set(BACKEND_DEFAULT "SERIAL" CACHE STRING "Default occa mode")
   set(NEKRS_GPU_MPI OFF CACHE BOOL "Enable GPU aware MPI" FORCE)
-endif() 
+endif()
 
 if(NEKRS_GPU_MPI)
   set(GPU_MPI "1")
@@ -355,6 +376,15 @@ install(
   ARCHIVE DESTINATION lib
 )
 
+if (NEKRS_BUILD_FLOAT)
+  install(
+    TARGETS nekrs-lib-fp32 nekrs-bin-fp32
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+  )
+endif()
+
 # Trailing slash prevents parent directory from being copied
 install(DIRECTORY scripts/ DESTINATION bin
   FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
@@ -372,22 +402,22 @@ install(SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/install_examples.cmake)
 
 message(NOTICE "")
 message(NOTICE "----------------- Summary -----------------")
-message(NOTICE "Installation directory: ${CMAKE_INSTALL_PREFIX}") 
+message(NOTICE "Installation directory: ${CMAKE_INSTALL_PREFIX}")
 message(NOTICE "C compiler: ${CMAKE_C_COMPILER}")
 message(NOTICE "C++ compiler: ${CMAKE_CXX_COMPILER}")
 message(NOTICE "Fortran compiler: ${CMAKE_Fortran_COMPILER}")
 message(NOTICE "Default backend : ${BACKEND_DEFAULT}")
 message(NOTICE "CPU backend compiler: ${OCCA_CXX} (flags: ${OCCA_CXXFLAGS})")
-if(OCCA_CUDA_ENABLED) 
+if(OCCA_CUDA_ENABLED)
   message(NOTICE "NVIDIA CUDA backend enabled (flags: ${OCCA_CUDA_COMPILER_FLAGS})")
 endif()
-if(OCCA_HIP_ENABLED) 
+if(OCCA_HIP_ENABLED)
   message(NOTICE "AMD HIP backend enabled (flags: ${OCCA_HIP_COMPILER_FLAGS})")
 endif()
 if(OCCA_DPCPP_ENABLED)
   message(NOTICE "DPCPP backend enabled (flags: ${OCCA_DPCPP_COMPILER_FLAGS})")
 endif()
-if(OCCA_OPENCL_ENABLED) 
+if(OCCA_OPENCL_ENABLED)
   message(NOTICE "OPENCL backend enabled (flags: ${OCCA_OPENCL_COMPILER_FLAGS})")
 endif()
 message(NOTICE "GPU aware MPI support: ${NEKRS_GPU_MPI}")
@@ -400,11 +430,11 @@ set(DEST_DIR "nekRS-v${PROJECT_VERSION}")
 set(TAR_NAME "nekRS-v${PROJECT_VERSION}.tar.gz")
 
 add_custom_target(tar
-  COMMAND ${CMAKE_COMMAND} 
-      -DDEST_DIR=${DEST_DIR} 
+  COMMAND ${CMAKE_COMMAND}
+      -DDEST_DIR=${DEST_DIR}
       -DOCCA_SOURCE_DIR=${OCCA_SOURCE_DIR}
-      -DHYPRE_SOURCE_DIR=${HYPRE_SOURCE_DIR} 
-      -DNEK5000_SOURCE_DIR=${NEK5000_SOURCE_DIR} 
+      -DHYPRE_SOURCE_DIR=${HYPRE_SOURCE_DIR}
+      -DNEK5000_SOURCE_DIR=${NEK5000_SOURCE_DIR}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/config/maketar.cmake
   COMMAND tar -czf ${TAR_NAME} ${DEST_DIR}
   COMMAND rm -rf ${DEST_DIR}

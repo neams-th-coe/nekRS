@@ -1,3 +1,38 @@
+# Release v23.1
+
+## What is new? 
+
+* Interpolation based velocity recycling
+* Build time option (`-DNEKRS_USE_DFLOAT_FLOAT=ON`) to run solver using FP32
+* combinedPCG
+* multi session nek-nek
+* Various bug fixes
+
+## Good to know
+* [reproducibility] variable time step controller restricts dt to 5 significant digits
+
+## Breaking Changes
+* `occa::memory::o_mempool` was removed instead use `auto foo = platform->o_memPool.reserve<T>(N)`
+* `occa::memory` objects (with a few exceptions) are typed now  
+* `occa::memory::slice, occa::memory::copyFrom, occa::memory::copyTo` are type aware (use words not bytes)
+* writeFld takes `const occa::memory&` instead of `const void*`
+* [udf] API argument `time` is `double` instead of `dfloat` 
+* nek::userchk is no longer called automatically during setup 
+* processing of `nekrs.upd` is triggered by SIGUSR2 instead of every N-steps
+
+## Known Bugs / Restrictions
+
+* Code is not fully optimized on CPUs in general and Intel GPUs
+* [485](https://github.com/Nek5000/Nek5000/issues/485)
+* [729](https://github.com/Nek5000/Nek5000/issues/759)
+* [258](https://github.com/Nek5000/nekRS/issues/258)
+
+## Thanks to our Contributors
+
+We are grateful to all who added new features, filed issues or helped resolve them, 
+asked and answered questions, and were part of inspiring discussions.
+
+
 # Release v23.0
 
 ## What is new? 
@@ -34,6 +69,8 @@
 * [par] Replace `stressFormulation = true` by `equation = navierStokes+variableViscosity` 
 * [par] Replace bcType `fixedValue` by `codedFixedValue`
 * [par] Replace `elasticity` by `pcg+block` for mesh solver
+* [okl] Replace `@barrier("local")` by `@barrier()` 
+* [oudf] `bc` struct member `trn` was removed
 * Use occa::memory mesh_t objects for vgeo, cubvgeo, ggeom, sgeom, LMM, invLMM (no longer mirrored on host)
 * All `boundaryIDs` need to be assigned in  `boundaryTypeMap` (use `none` for an internal boundary)
 
